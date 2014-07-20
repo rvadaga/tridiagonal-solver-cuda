@@ -1,0 +1,19 @@
+list of functions in gtsv_spike_partial_diag_pivot_v1:
+	findBestGrid
+	foward_marshaling_bxb - on all matrices
+	tiled_diag_pivot_x1
+	spike_local_reduction_x1
+	spike_GPU_global_solving_x1
+	spike_GPU_local_solving_x1
+	spike_GPU_back_sub_x1
+	back_marshaling_bxb - on rhs matrix
+
+list of functions in gtsv_spike_partial_diag_pivot_v_few:
+	findBestGrid
+	foward_marshaling_bxb - on all matrices
+	tiled_diag_pivot_x1
+	spike_local_reduction_x1
+	spike_GPU_global_solving_x1
+	spike_GPU_local_solving_x1
+	spike_GPU_back_sub_x1
+	back_marshaling_bxb - on rhs matrix
