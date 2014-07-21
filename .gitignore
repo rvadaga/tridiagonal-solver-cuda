@@ -1,0 +1,6 @@
+#ignore object files
+*.out
+*.o
+
+#ignore output log file
+output

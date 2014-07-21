@@ -1,4 +1,6 @@
-tridiagonal-solver-cuda
+Tridiagonal-solver-cuda
 =======================
 
-a scalable, numerically stable tridiagonal solver implemented in NVidia CUDA
+A scalable, numerically stable tridiagonal solver implemented using NVidia CUDA.
+
+http://faculty.ucmerced.edu/rmarcia/pub/slides/SIAM_ALA09_RMarciaweb.pdf

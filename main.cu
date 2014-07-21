@@ -118,7 +118,7 @@ void compare_result
 	int p = 0; //error counter
 	int t = 0; //check counter
 	
-	for(int k=0;k<rhs;k++)
+	for(int k=0; k<rhs; k++)
 	{
 		if(k<k_bound)
 		{
@@ -133,16 +133,16 @@ void compare_result
 			for(int i=0;i<len;i++)
 			{
 				T diff = cuSub(x[k*m+j*len+i], y[k*m+j*len+i]);
-				err = cuReal( cuMul(diff, cuConj(diff) ));
+				err = cuReal(cuMul(diff, cuConj(diff) ));
 				sum_err +=err;
-				x_2= cuReal( cuMul(x[k*m+j*len+i], cuConj(x[k*m+j*len+i])));
-				total_sum+=x_2;
+				x_2 = cuReal(cuMul(x[k*m+j*len+i], cuConj(x[k*m+j*len+i])));
+				total_sum += x_2;
 				
 				//avoid overflow in error check
-				r_err = x_2>EPS?err/x_2:0.0;
-				if(err >abs_err || r_err>re_err)
+				r_err = x_2 > EPS ? err/x_2:0.0;
+				if(err > abs_err || r_err > re_err)
 				{
-					if(p<p_bound)
+					if(p < p_bound)
 					{
 						printf("Error occurred at system %d, element %2d, cpu = %10.6lf and gpu = %10.6lf at %d\n", j, i, cuReal(x[k*m+j*len+i]), cuReal(y[k*m+j*len+i]), i%tx);
 						printf("Its absolute error is %le and relative error is %le.\n", err, r_err);
@@ -150,16 +150,16 @@ void compare_result
 					p++;
 				}
 				
-				if(t<16 )
+				if(t < 16)
 				{
 					printf("Checked system %d, element %2d, cpu = %10.6lf and gpu = %10.6lf\n",j,i,cuReal(x[k*m+j*len+i]),cuReal(y[k*m+j*len+i]));
 					t++;
 				}
 			}
 		}
-		if(k<k_bound)
+		if(k < k_bound)
 		{
-			if(p==0)
+			if(p == 0)
 			{
 				printf("All correct.\n\n");
 			}
@@ -229,7 +229,8 @@ void test_gtsv_v1(int m)
 	h_d[m-1]  = cuGet<T>( (rand()/(double)RAND_MAX)*2.0-1.0);
 	h_du[m-1] = cuGet<T>(0); 
 	// last element in super diagonal is equal to 0
-	
+	// By following this convention, we can access elements of dl, du, d present in the same row by the row's index.
+
 	h_b[0]    = cuGet<T>( (rand()/(double)RAND_MAX)*2.0-1.0 );
 	h_b[m-1]  = cuGet<T>( (rand()/(double)RAND_MAX)*2.0-1.0 );
 	
@@ -506,6 +507,7 @@ int main(int argc, char *argv[])
 	test_gtsv_v1<double,double>(m);	
     printf("Finished GTSV testing using double\n\n");
 	printf("-------------------------------------------\n");
+	exit(1);
 	printf("GTSV testing using double and multiple RHS ...\n");
 	test_gtsv_v_few<double,double>(m,k);
     printf("Finished GTSV testing multiple RHS\n\n");

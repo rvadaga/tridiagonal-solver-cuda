@@ -29,69 +29,74 @@ OR THE USE OR OTHER DEALINGS WITH THE SOFTWARE.
 // Data layout transformation for inputs
 // dim3 g_data(b_dim/tile_marshal (8), s (32));
 // dim3 b_data(tile_marshal (16), tile_marshal (16));
-// foward_marshaling_bxb<T><<<g_data (8, 32), b_data (16, 16), marshaling_share_size (16 * 17 * size(T))>>>(dl_buffer, dl, stride (144), b_dim (128), m (524800), cuGet<T>(0));
+// forward_marshaling_bxb<T><<<g_data (8, 32), b_data (16, 16), marshaling_share_size (16 * 17 * size(T))>>>(dl_buffer, dl, stride (144), b_dim (128), m (524800), cuGet<T>(0));
 template <typename T> 
-__global__ void foward_marshaling_bxb ( T* x,					// output array
+__global__ void forward_marshaling_bxb ( T* x,					// output array
                                         const T* y,				// input array
-                                        const int h_stride,		// 144 
-                                        const int l_stride,		// 128 
-                                        int m,					// 
+                                        const int h_stride,		// width (horizontal stride) of block to be transposed 
+                                        const int l_stride,		// height (length stride) of block to be transposed
+                                        int m,					// input array size 
                                         T pad 					// number to be padded in shared mem
                                         )
 {	
-	// consider a simple case where h_stride = bdx
-	// each thread works on a single element.
-	// a block of threads does a transpose and it is placed in the appropriate location. 
-
-	// input elements are organized into a block of size h_stride x l_stride
-	// now divide this further into sub-blocks of size 16 x 16
-	// h_stride and l_stride have to be multiples of 16
-	// each thread block works on each sub block and transposes the original block
-
-	// till here, the explanation needs correction
-
 	// This kernel does the following:
-	// DM is supposed to do a local transpose of a block of elements in which a thread
+	// DM is meant to do a local transpose of a block of elements in which a thread
 	// block will work later (for partitioned system solver).
 
-	// This fnxn actually does a tranpose of the whole input array (a set of diagonal, sub-diag
-	// or super-diag elements), which is arranged in a 2d fashion (of width h_stride). Each thread block
-	// works on a block of elements of size (h_stride x bdx).
+	// Carefully note the difference made below between blocks, sub-blocks, and thread blocks to understand this concept.
+	// The same convention has been followed throughout.
 
-	// It is supposed to take a local transpose, but here a transpose of the entire 2d array is being done.
-
+	// Consider the input array (which is a set of elements in the tridiagonal matrix) arranged as a matrix of
+	// width h_stride. The matrix is padded with 'pad' such that it's size becomes equal to m_pad.
+	// Now, the height of the matrix is m_pad/h_stride. This matrix is divided into blocks of size (h_stride x l_stride). 
+	// This fnxn does a local transpose of the these blocks. Each block is further divided into sub-blocks of size (h_stride x
+	// bdx). Therefore, each block is horizontally divided into l_stride/bdx sub-blocks i.e. each block has l_stride/bdx 
+	// sub-blocks arranged vertically. Note that l_stride has to be an integral multiple of bdx. Each thread block 
+	// works on a single sub-block. There are tile_marshal * tile_marshal threads in a thread block. So, each thread
+	// is going to work on h_stride/tile_marshal elements. Also, observe that tile_marshal = bdx.
+	// So, when a block is transposed, it's sub-blocks which were in the y dimension, would now be in the x dimension.
+	// There are 'b_dim/tile_marshal' thread blocks in x dimension. Note: b_dim = l_stride. 
+	// All the thread-blocks in the x dimension work on single block.
+	
+	// A next set of b_dim/tile_marshal thread-blocks, with blockIdx.y = 1, work on the next block of h_stride x 
+	// l_stride elements, which is present directly below the first block of elements. Therefore, when this block is
+	// transposed locally, it's elements would be below the tranposed version of the first block of elements.
+	
 	int bdx;
 	int global_in;
 	int global_out;
 	int shared_in;
 	int shared_out;
-	
-	bdx = blockDim.x; // 16 = tile_marshal
+	int k;	
+	bdx = blockDim.x; // tile_marshal = 16
 
 	global_in = (blockIdx.y * l_stride * h_stride) + ((blockIdx.x * bdx + threadIdx.y) * h_stride) + threadIdx.x;
-	blockIdx
+	// On moving from one set of thread-blocks arranged in the x dimension, to the next set of thread-blocks below, an
+	// offset of l_stride x h_stride has to be added. This explains the first term.
 	global_out = (blockIdx.y * l_stride * h_stride) + (threadIdx.y * l_stride) + (blockIdx.x * bdx) + threadIdx.x;
 	shared_in = threadIdx.y*(bdx+1)+threadIdx.x;
 	shared_out = threadIdx.x*(bdx+1)+threadIdx.y;
 	// 1 added to avoid bank conflicts
-	int k;
 
     struct __dynamic_shmem__<T> shmem; 
     T *share = shmem.getPtr();
 
-	for(k=0;k<h_stride;k+=bdx)
+	for(k=0; k < h_stride; k += bdx)
 	{	
 		share[shared_in]= global_in >= m ? pad : y[global_in];
 		global_in += bdx;
-		__syncthreads();
-		
+		__syncthreads();	// to ensure all loads into shmem are done 
+		// A thread with index (tx, ty) loads an element e1 into shared memory.
+		// Another thread with index (ty, tx) loads another element e2 into shmem.
+		// The first thread copies element e2 from shmem to the appr. location in output matrix.
+		// And, the 2nd therad copies element e1 into the output matrix
 		x[global_out] = share[shared_out];
 		global_out+=bdx*l_stride;
-		__syncthreads();
+		__syncthreads();	// to ensure all writes are done
 	}		
 }
 
-//Data layout transformation for results
+// Data layout transformation for results
 template <typename T> 
 __global__ void  back_marshaling_bxb (
                                       T* x,
@@ -101,56 +106,60 @@ __global__ void  back_marshaling_bxb (
                                       int m
                                       )
 {	
-	int b_dim;
+	int bdx;
 	
 	int global_in;
 	int global_out;
 	int shared_in;
 	int shared_out;
 	
-	b_dim = blockDim.x; 	//16
+	bdx = blockDim.x; 	// 16
 
-	global_out = blockIdx.y*l_stride*h_stride +  (blockIdx.x*b_dim+threadIdx.y)*h_stride+threadIdx.x;
-	global_in = blockIdx.y*l_stride*h_stride + threadIdx.y*l_stride + blockIdx.x*b_dim+threadIdx.x;
-	shared_in = threadIdx.y*(b_dim+1)+threadIdx.x;
-	shared_out = threadIdx.x*(b_dim+1)+threadIdx.y;
+	global_out = blockIdx.y*l_stride*h_stride + (blockIdx.x*bdx + threadIdx.y)*h_stride + threadIdx.x;
+	global_in = blockIdx.y*l_stride*h_stride + threadIdx.y*l_stride + blockIdx.x*bdx + threadIdx.x;
+	shared_in = threadIdx.y*(bdx+1) + threadIdx.x;
+	shared_out = threadIdx.x*(bdx+1) + threadIdx.y;
 	
 	int k;
 
     struct __dynamic_shmem__<T> shmem; 
     T *share = shmem.getPtr();
 
-	for(k=0;k<h_stride;k+=b_dim)
+	for(k=0;k<h_stride;k+=bdx)
 	{
 	
 		share[shared_in]=y[global_in];
-		global_in += b_dim*l_stride;
+		global_in += bdx*l_stride;
 		
 		__syncthreads(); // all loads into shmem are done
 		
         if (global_out < m) {
 		    x[global_out] = share[shared_out];
         }
-		global_out+=b_dim;
+		global_out+=bdx;
 		__syncthreads();
 	}		
 }
 
 
-// Partitioned solver with tiled diagonal pivoting
-// T_ELEM_REAL to hold the type of sgema (it is necesary for complex variants
+// Partitioned solver with tiled diagonal pivoting. Solves for V_i, W_i, Y_i (the modified rhs)
+// Each thread works on 'h_stride' elements
+// In the padded tridiagonal matrix, a thread works on 'h_stride' consecutive rows.
+// T_ELEM_REAL to hold the type of sigma (it is necesary for complex variants)
+// All arrays (d, dl, du, b, v, w, c2) are data marshaled.
+// tiled_diag_pivot_x1<T,T_REAL><<<s, b_dim>>>(b_buffer, w_buffer, v_buffer, c2_buffer, flag, dl_buffer, d_buffer, du_buffer, stride, tile);
 template <typename T_ELEM , typename T_ELEM_REAL> 
 __global__ void tiled_diag_pivot_x1(
-                                      T_ELEM* x,
-                                      T_ELEM* w,  			// left halo
-                                      T_ELEM* v,  			// right halo
-                                      T_ELEM* b_buffer,  	// modified main diag
-                                      bool *flag,  			// buffer to tag pivot
-                                      const T_ELEM* a,    	// lower diagonal
-                                      const T_ELEM* b,    	// main diagonal
-                                      const T_ELEM* c,    	// upper diagonal
-                                      const int stride,
-                                      const int tile
+                                      T_ELEM* x,			// rhs array (b_buffer)
+                                      T_ELEM* w,  			// left halo (w_buffer)
+                                      T_ELEM* v,  			// right halo (v_buffer)
+                                      T_ELEM* b_buffer,  	// modified msin diagonal (c2_buffer)
+                                      bool *flag,  			// buffer to tag pivot (flag)
+                                      const T_ELEM* a,    	// lower diagonal (dl_buffer)
+                                      const T_ELEM* b,    	// main diagonal (d_buffer)
+                                      const T_ELEM* c,    	// upper diagonal (du_buffer)
+                                      const int stride,		// h_stride (stride)
+                                      const int tile 		// tile
                                       )                                    
 {
 	
@@ -160,80 +169,83 @@ __global__ void tiled_diag_pivot_x1(
 	
 	bx = blockIdx.x;
 	b_dim = blockDim.x;
-	ix = bx*stride*b_dim+threadIdx.x;
+	ix = bx*stride*b_dim + threadIdx.x;
 	
-	int k=0;
-	T_ELEM b_k,b_k_1,a_k_1,c_k,c_k_1,a_k_2;
-	T_ELEM x_k,x_k_1;
-	T_ELEM w_k,w_k_1;
+	int k = 0; // k denotes row index
+	T_ELEM b_k, b_k_1, a_k_1, c_k, c_k_1, a_k_2;
+	T_ELEM x_k, x_k_1;
+	T_ELEM w_k, w_k_1;
 	T_ELEM v_k_1;
 	
-	T_ELEM_REAL kia = (sqrt(5.0)-1.0)/2.0;
+	T_ELEM_REAL kappa = (sqrt(5.0)-1.0)/2.0;
+
+	// elements in the first row
 	b_k = b[ix];
 	c_k = c[ix];
 	//x_k = d[ix];
     x_k = x[ix];
 	w_k = a[ix];
 	
+	// elements in the second row
 	a_k_1 = a[ix+b_dim];
 	b_k_1 = b[ix+b_dim];
 	c_k_1 = c[ix+b_dim];
 	//x_k_1 = d[ix+b_dim];
     x_k_1 = x[ix+b_dim];
 	
+	// element in the third row
 	a_k_2 = a[ix+2*b_dim];
 		
 	int i;
-		
-	//forward
-	for(i=1;i<=tile;i++)
+
+	// forward
+	for(i=1; i<=tile; i++) // dynamic tiling approach 
 	{
-		while(k<(stride*i)/tile)
+		while(k < (stride*i)/tile) // loop runs as long as k < stride
 		{        
-			T_ELEM_REAL sgema;
+			T_ELEM_REAL sigma;
 			
 			// math.h has an intrinsics for float, double 
-            sgema = max(cuAbs(c_k), cuAbs(a_k_1));
-			sgema = max(sgema, cuAbs(b_k_1));
-			sgema = max( sgema, cuAbs(c_k_1));
-			sgema = max( sgema, cuAbs(a_k_2));			
+            sigma = max(cuAbs(c_k), cuAbs(a_k_1));
+			sigma = max(sigma, 		cuAbs(b_k_1));
+			sigma = max(sigma, 		cuAbs(c_k_1));
+			sigma = max(sigma, 		cuAbs(a_k_2));			
 			
-			if( cuMul(cuAbs(b_k),sgema) >= cuMul( kia, cuMul(cuAbs(c_k), cuAbs(a_k_1)) ))
+			// if condition is satisfied, 1 by 1 pivoting ==> d = 1
+			if(cuMul(cuAbs(b_k), sigma) >= cuMul(kappa, cuMul(cuAbs(c_k), cuAbs(a_k_1))))
 			{    
-                T_ELEM b_inv = cuDiv( cuGet<T_ELEM>(1), b_k);
-				//write back
-				flag[ix]=true;
+                T_ELEM b_inv = cuDiv(cuGet<T_ELEM>(1), b_k);
+				flag[ix] = true; // if 1 by 1 pivoting, set flag = 1
 				
-				x_k = cuMul( x_k, b_inv );
-				w_k = cuMul( w_k, b_inv );
+				x_k = cuMul(x_k, b_inv);
+				w_k = cuMul(w_k, b_inv);
 				
-				x[ix] = x_k;		//k
-				w[ix] = w_k;		//k
-				b_buffer[ix]=b_k;
-				//
+				x[ix] = x_k;		// row k
+				w[ix] = w_k;		// row k
+				b_buffer[ix] = b_k;	// row k
 
-				if( k < stride-1)
+				if(k < stride-1)	// runs as long as we are not in last row
 				{
-					ix+=b_dim;
-					//update					        
-                    x_k = cuFma( cuNeg(a_k_1) , x_k, x_k_1); //k+1
-					w_k = cuMul( cuNeg(a_k_1), w_k);        //k+1                    					
-                    b_k = cuFma( cuNeg(a_k_1), cuMul(c_k,b_inv) , b_k_1);         //k+1
-					
-					if( k < stride-2)				
+					ix += b_dim;
+					// update elements in k+1 row					        
+                    x_k = cuFma(cuNeg(a_k_1), x_k, x_k_1); 					// k+1 row
+					w_k = cuMul(cuNeg(a_k_1), w_k);        					// k+1 row                					
+                    b_k = cuFma(cuNeg(a_k_1), cuMul(c_k, b_inv), b_k_1);	// k+1 row
+
+					if(k < stride-2) // runs on all rows excluding last, last but 1.				
 					{
-						//load new data
-						b_k_1 = b[ix+b_dim];  //k+2
-						a_k_1 = a_k_2;		  //k+2
-						//x_k_1 = d[ix+b_dim];
-                        x_k_1 = x[ix+b_dim];
-						c_k   = c_k_1;		  //k+1
-						c_k_1 = c[ix+b_dim];  //k+2
+						// update elements in k+1, k+2 row and set elements in k+3 row
+						b_k_1 = b[ix+b_dim];  // k+2 row
+						a_k_1 = a_k_2;		  // k+2 row
+						// x_k_1 = d[ix+b_dim];
+                        x_k_1 = x[ix+b_dim];  // k+1 row
+						c_k   = c_k_1;		  // k+1 row
+						c_k_1 = c[ix+b_dim];  // k+2 row
 						
-						a_k_2 = k< (stride-3) ? a[ix+2*b_dim] : cuGet<T_ELEM>(0); //k+3
-						
+						a_k_2 = k < (stride-3) ? a[ix+2*b_dim] : cuGet<T_ELEM>(0); // k+3 row
 					}
-					else			//k =stride -2
+
+					else  // k = stride-2, runs on last but 1 row
 					{
 						b_k_1 = cuGet<T_ELEM>(0);
 						a_k_1 = cuGet<T_ELEM>(0);
@@ -243,58 +255,62 @@ __global__ void tiled_diag_pivot_x1(
 						a_k_2 = cuGet<T_ELEM>(0);
 					}
 				}
-				else		//k=stride -1
+
+				else  // k = stride-1, runs on last row
 				{
-					v[ix] = cuMul( c[ix], b_inv );
+					v[ix] = cuMul(c[ix], b_inv); // update v[last row]
 					ix   += b_dim;
 				}
-				
-				k+=1;             							
+
+				k += 1;             							
 			}
+			
+			// do 2 by 2 pivoting ==> d = 2
 			else
 			{		
 				T_ELEM delta;
-								
-                delta = cuFma( b_k, b_k_1, cuNeg(cuMul(c_k,a_k_1)) );
-				delta = cuDiv( cuGet<T_ELEM>(1) , delta );				                
-                x[ix] = cuFma( x_k, b_k_1, cuNeg( cuMul(c_k,x_k_1))); //k
-                x[ix] = cuMul( x[ix], delta);
+				flag[ix] = false; // flag = 0 if 2-by-2 pivoting
+
+				// finding determinant of block B_1
+                delta = cuFma(b_k, b_k_1, cuNeg(cuMul(c_k, a_k_1)));
+				delta = cuDiv(cuGet<T_ELEM>(1), delta);
+                x[ix] = cuFma(x_k, b_k_1, cuNeg(cuMul(c_k, x_k_1))); // k row
+                x[ix] = cuMul(x[ix], delta);
                 
-				w[ix]  = cuMul(w_k, cuMul(b_k_1,delta)); //k
-				b_buffer[ix]=b_k;				
-				flag[ix] = false;
+				w[ix] = cuMul(w_k, cuMul(b_k_1, delta)); // k row
+				b_buffer[ix] = b_k;				
 				
-                x_k_1 = cuFma( b_k,x_k_1, cuNeg(cuMul(a_k_1,x_k))); //k+1
-                x_k_1 = cuMul(x_k_1,delta);
-				w_k_1 = cuMul(cuMul(cuNeg(a_k_1),w_k), delta);	  //k+1
+                x_k_1 = cuFma(b_k, x_k_1, cuNeg(cuMul(a_k_1, x_k))); // k+1 row
+                x_k_1 = cuMul(x_k_1, delta);
+				w_k_1 = cuMul(cuMul(cuNeg(a_k_1), w_k), delta);	  // k+1 row
 				
-				x[ix+b_dim]        = x_k_1;	  //k+1
-				w[ix+b_dim]        = w_k_1;	  //k+1
+				x[ix+b_dim]        = x_k_1;	  // k+1 row
+				w[ix+b_dim]        = w_k_1;	  // k+1 row
 				b_buffer[ix+b_dim] = b_k_1;				
-				flag[ix+b_dim]=false;	
+				flag[ix+b_dim]	   = false;	
 				
-				if(k<stride-2)
+				if(k < stride-2) // runs on all rows except last, last but 1.
 				{
-					ix+=2*b_dim;		
-					//update					
-                    //x_k = cuFma(cuNeg(a_k_2), x_k_1, d[ix]);     //k+2      
-                    x_k = cuFma(cuNeg(a_k_2), x_k_1, x[ix]);       //k+2              
-					w_k = cuMul(cuNeg(a_k_2),w_k_1);     //k+2					
-                    b_k = cuMul(cuMul(a_k_2,b_k), cuMul(c_k_1,delta));		//k+2
-                    b_k = cuSub( b[ix],b_k);
+					ix += 2*b_dim;		
+					// update					
+                    // x_k = cuFma(cuNeg(a_k_2), x_k_1, d[ix]);		     // k+2 row
+                    x_k = cuFma(cuNeg(a_k_2), 		x_k_1, x[ix]);       // k+2 row              
+					w_k = cuMul(cuNeg(a_k_2), 		w_k_1);     		 // k+2 row					
+                    b_k = cuMul(cuMul(a_k_2, b_k), 	cuMul(c_k_1, delta));// k+2 row
+                    b_k = cuSub(b[ix], b_k);
 					
-					if(k<stride-3)
+					if(k < stride-3) // runs on all rows excluding last, last but 1, last but 2
 					{
-						//load new data
-						c_k = c[ix];     //k+2
-						b_k_1 = b[ix+b_dim];  //k+3
-						a_k_1 = a[ix+b_dim];  //k+3
-						c_k_1 = c[ix+b_dim];  //k_3
-						//x_k_1 = d[ix+b_dim];  //k+3
-                        x_k_1 = x[ix+b_dim];  //k+3
-						a_k_2 = k<stride-4? a[ix+2*b_dim] : cuGet<T_ELEM>(0);
+						// load new data
+						c_k   = c[ix]; 		    // k+2 row
+						b_k_1 = b[ix+b_dim];	// k+3 row
+						a_k_1 = a[ix+b_dim];  	// k+3 row
+						c_k_1 = c[ix+b_dim];  	// k+3 row
+						// x_k_1 = d[ix+b_dim]; // k+3 row
+                        x_k_1 = x[ix+b_dim];  	// k+3 row
+						a_k_2 = k < stride-4 ? a[ix+2*b_dim] : cuGet<T_ELEM>(0);
 					}
-					else		//k=stride-3
+					else 	// k = stride-3, runs on last but 2 row
 					{
 						b_k_1 = cuGet<T_ELEM>(0);
 						a_k_1 = cuGet<T_ELEM>(0);
@@ -304,91 +320,92 @@ __global__ void tiled_diag_pivot_x1(
 						a_k_2 = cuGet<T_ELEM>(0);
 					}
 				}
-				else		////k=stride -2
+				else		// k = stride-2, runs on last but 1 row
 				{
-					
 					T_ELEM v_temp;
-					v_temp = cuMul( c[ix+b_dim], delta);					
-                    v[ix]  = cuMul(v_temp, cuNeg(c_k));
-					v[ix+b_dim] = cuMul(v_temp,b_k);
-					ix+= 2*b_dim;
+					v_temp = cuMul(c[ix+b_dim], delta);					
+                    v[ix]  = cuMul(v_temp, 		cuNeg(c_k));
+					v[ix+b_dim] = cuMul(v_temp,	b_k);
+					ix += 2*b_dim;
 				}				
-				k+=2;	                			
+				k += 2;    			
 			}
-			
 		}
 	}
 
+	// Now, k = stride
+	// backward
+	// go to last row
+	k  -= 1;
+	ix -= b_dim;
 
-	//k=stride
-	
-	//backward
-	//last one
-	k-=1;
-	ix-=b_dim;
-	if(flag[ix])
+	if(flag[ix]) // 1-by-1 pivoting
 	{
-		x_k_1=x[ix];
-		w_k_1=w[ix];
-		v_k_1=v[ix];
-		k-=1;
-		//x[ix]
+		x_k_1 = x[ix];
+		w_k_1 = w[ix];
+		v_k_1 = v[ix];
+		k    -= 1;
+		// x[ix]
 	}
-	else		//2-by-2
+	else // 2-by-2 pivoting
 	{
-		ix-=b_dim;
-		x_k_1=x[ix];
-		w_k_1=w[ix];
-		v_k_1=v[ix];
-		k-=2;
+		ix   -= b_dim;
+		x_k_1 = x[ix];
+		w_k_1 = w[ix];
+		v_k_1 = v[ix];
+		k    -= 2;
 	}
-	ix-=b_dim;
+
+	ix -= b_dim;
 	
-	for(i=tile-1;i>=0;i--)	{
-		while(k>=(i*stride)/tile){
-			if(flag[ix]){		//1-by-1			
+	for(i=tile-1; i>=0; i--)
+	{
+		while(k>=(i*stride)/tile)
+		{
+			if(flag[ix]) // 1-by-1 pivoting
+			{	
 				c_k = c[ix];
 				b_k = b_buffer[ix];				
                 
-                T_ELEM tempDiv = cuDiv(cuNeg(c_k),b_k);
-                x_k_1 = cuFma( x_k_1, tempDiv, x[ix]);                				
-                w_k_1 = cuFma( w_k_1, tempDiv , w[ix]);                
+                T_ELEM tempDiv = cuDiv(cuNeg(c_k), b_k);
+                x_k_1 = cuFma(x_k_1, tempDiv, x[ix]);                				
+                w_k_1 = cuFma(w_k_1, tempDiv, w[ix]);                
 				v_k_1 = cuMul(v_k_1, tempDiv);
                 
 				x[ix] = x_k_1;
 				w[ix] = w_k_1;
 				v[ix] = v_k_1;
-				k-=1;
+				k -= 1;
 			}
-			else {
-			
+			else // 
+			{
 				T_ELEM delta;
 				b_k   = b_buffer[ix-b_dim];
 				c_k   = c[ix-b_dim];
 				a_k_1 = a[ix];
 				b_k_1 = b_buffer[ix];
 				c_k_1 = c[ix];
-                delta = cuFma( b_k, b_k_1, cuNeg(cuMul(c_k,a_k_1)) );
-				delta = cuDiv( cuGet<T_ELEM>(1) , delta );	                
+                delta = cuFma(b_k, b_k_1, cuNeg(cuMul(c_k, a_k_1)));
+				delta = cuDiv(cuGet<T_ELEM>(1), delta );	                
                 
-                T_ELEM prod = cuMul(c_k_1 , cuMul(b_k , delta));
+                T_ELEM prod = cuMul(c_k_1, cuMul(b_k, delta));
                 
-				x[ix] =  cuFma(cuNeg(x_k_1), prod, x[ix]);
-				w[ix] =  cuFma(cuNeg(w_k_1), prod, w[ix]);
-				v[ix] =  cuMul(cuNeg(v_k_1),prod);
+				x[ix] = cuFma(cuNeg(x_k_1), prod, x[ix]);
+				w[ix] = cuFma(cuNeg(w_k_1), prod, w[ix]);
+				v[ix] = cuMul(cuNeg(v_k_1),prod);
 				
-                ix  -= b_dim;
-                prod = cuMul(c_k_1 , cuMul(c_k , delta));
+                ix   -= b_dim;
+                prod  = cuMul(c_k_1, cuMul(c_k, delta));
                 
-                x_k_1 = cuFma( x_k_1,prod, x[ix]);
-                w_k_1 = cuFma( w_k_1,prod, w[ix]);
-                v_k_1 = cuMul(v_k_1,prod); 
+                x_k_1 = cuFma(x_k_1, prod, x[ix]);
+                w_k_1 = cuFma(w_k_1, prod, w[ix]);
+                v_k_1 = cuMul(v_k_1, prod); 
                 x[ix] = x_k_1;
                 w[ix] = w_k_1;                 
                 v[ix] = v_k_1; 
-                k-=2;
+                k -= 2;
 			}             
-			ix-=b_dim;         
+			ix -= b_dim;         
 		}            
 	}    
 }
@@ -401,10 +418,10 @@ __global__ void tiled_diag_pivot_x1(
 template <typename T_ELEM , typename T_ELEM_REAL> 
 __global__ void tiled_diag_pivot_x_few(
                                       T_ELEM* x,
-                                      const bool *flag,  //buffer to tag pivot
-                                      const T_ELEM* a,    //lower diag
-                                      const T_ELEM* b,    //modified main diag
-                                      const T_ELEM* c,    //upper diag
+                                      const bool *flag,   // buffer to tag pivot
+                                      const T_ELEM* a,    // lower diag
+                                      const T_ELEM* b,    // modified main diag
+                                      const T_ELEM* c,    // upper diag
                                       const int stride,
                                       const int tile,
 									  const int len
@@ -425,7 +442,7 @@ __global__ void tiled_diag_pivot_x_few(
 	T_ELEM b_k,b_k_1,a_k_1,c_k;
 	T_ELEM x_k,x_k_1;
 	
-	T_ELEM_REAL kia = (sqrt(5.0)-1.0)/2.0;
+	T_ELEM_REAL kappa = (sqrt(5.0)-1.0)/2.0;
 	b_k = b[ix];
 	c_k = c[ix];
     x_k = x[rhs_ix];
@@ -637,7 +654,7 @@ __global__ void tiled_diag_pivot_x2(
 	T_ELEM w_k,w_k_1;
 	T_ELEM v_k_1;
 	
-	T_ELEM_REAL kia = (sqrt(5.0)-1.0)/2.0;
+	T_ELEM_REAL kappa = (sqrt(5.0)-1.0)/2.0;
 	b_k = b[ix];
 	c_k = c[ix];
 	//x_k = d[ix];
@@ -661,15 +678,15 @@ __global__ void tiled_diag_pivot_x2(
 	{
 		while(k<(stride*i)/tile)
 		{        
-			T_ELEM_REAL sgema;
+			T_ELEM_REAL sigma;
 			
 			// math.h has an intrinsics for float, double 
-            sgema = max(cuAbs(c_k), cuAbs(a_k_1));
-			sgema = max(sgema, cuAbs(b_k_1));
-			sgema = max( sgema, cuAbs(c_k_1));
-			sgema = max( sgema, cuAbs(a_k_2));			
+            sigma = max(cuAbs(c_k), cuAbs(a_k_1));
+			sigma = max(sigma, cuAbs(b_k_1));
+			sigma = max( sigma, cuAbs(c_k_1));
+			sigma = max( sigma, cuAbs(a_k_2));			
 			
-			if( cuMul(cuAbs(b_k),sgema) >= cuMul( kia, cuMul(cuAbs(c_k), cuAbs(a_k_1)) ))
+			if( cuMul(cuAbs(b_k),sigma) >= cuMul( kappa, cuMul(cuAbs(c_k), cuAbs(a_k_1)) ))
 			{    
                 T_ELEM b_inv = cuDiv( cuGet<T_ELEM>(1), b_k);
 				//write back
@@ -889,7 +906,7 @@ __global__ void tiled_diag_pivot_x2(
 
 
 //Partitioned solver with tiled diagonal pivoting
-// T_ELEM_REAL to hold the type of sgema (it is necesary for complex variants
+// T_ELEM_REAL to hold the type of sigma (it is necesary for complex variants
 template <typename T_ELEM , typename T_ELEM_REAL> 
 __global__ void tiled_diag_pivot_wv_only(
                                       T_ELEM* w,  //left halo
@@ -918,7 +935,7 @@ __global__ void tiled_diag_pivot_wv_only(
 	T_ELEM w_k,w_k_1;
 	T_ELEM v_k_1;
 	
-	T_ELEM_REAL kia = (sqrt(5.0)-1.0)/2.0;
+	T_ELEM_REAL kappa = (sqrt(5.0)-1.0)/2.0;
 	b_k = b[ix];
 	c_k = c[ix];
 	w_k = a[ix];
@@ -936,15 +953,15 @@ __global__ void tiled_diag_pivot_wv_only(
 	{
 		while(k<(stride*i)/tile)
 		{        
-			T_ELEM_REAL sgema;
+			T_ELEM_REAL sigma;
 			
 			// math.h has an intrinsics for float, double 
-            sgema = max(cuAbs(c_k), cuAbs(a_k_1));
-			sgema = max(sgema, cuAbs(b_k_1));
-			sgema = max( sgema, cuAbs(c_k_1));
-			sgema = max( sgema, cuAbs(a_k_2));			
+            sigma = max(cuAbs(c_k), cuAbs(a_k_1));
+			sigma = max(sigma, cuAbs(b_k_1));
+			sigma = max(sigma, cuAbs(c_k_1));
+			sigma = max(sigma, cuAbs(a_k_2));			
 			
-			if( cuMul(cuAbs(b_k),sgema) >= cuMul( kia, cuMul(cuAbs(c_k), cuAbs(a_k_1)) ))
+			if( cuMul(cuAbs(b_k),sigma) >= cuMul( kappa, cuMul(cuAbs(c_k), cuAbs(a_k_1)) ))
 			{    
                 T_ELEM b_inv = cuDiv( cuGet<T_ELEM>(1), b_k);
 				//write back
@@ -1019,10 +1036,10 @@ __global__ void tiled_diag_pivot_wv_only(
 					if(k<stride-3)
 					{
 						//load new data
-						c_k = c[ix];     //k+2
-						b_k_1 = b[ix+b_dim];  //k+3
-						a_k_1 = a[ix+b_dim];  //k+3
-						c_k_1 = c[ix+b_dim];  //k_3
+						c_k = c[ix];     	  // k+2
+						b_k_1 = b[ix+b_dim];  // k+3
+						a_k_1 = a[ix+b_dim];  // k+3
+						c_k_1 = c[ix+b_dim];  // k_3
 						a_k_2 = k<stride-4? a[ix+2*b_dim] : cuGet<T_ELEM>(0);
 					}
 					else		//k=stride-3
@@ -1144,7 +1161,7 @@ __global__ void tiled_diag_pivot_x32(
 	T_ELEM b_k,b_k_1,a_k_1,c_k,c_k_1;
 	T_ELEM x_k,x_k_1;
 	
-	T_ELEM_REAL kia = (sqrt(5.0)-1.0)/2.0;
+	T_ELEM_REAL kappa = (sqrt(5.0)-1.0)/2.0;
 	x_k = x[ix];
 	b_k = b[iy];
 	c_k = c[iy];
@@ -1296,18 +1313,18 @@ __global__ void tiled_diag_pivot_x32(
 	}	
 }
 
-//SPIKE solver within a thread block for 1x rhs
+// SPIKE solver within a thread block for 1x rhs
+// spike_local_reduction_x1<T><<<s, b_dim, local_reduction_share_size>>>(b_buffer, w_buffer, v_buffer, x_level_2, w_level_2, v_level_2, stride);
 template <typename T> 
-__global__ void 
-spike_local_reduction_x1
+__global__ void spike_local_reduction_x1
 (
-T* x,
-T* w,
-T* v,
-T* x_mirror,
-T* w_mirror,
-T* v_mirror,
-const int stride  //stride per thread
+T* x,				// main diagonal
+T* w,				// left halo
+T* v,				// right halo
+T* x_mirror,		// 
+T* w_mirror,		// 
+T* v_mirror,		// 
+const int stride  	// stride per thread
 )
 {
 	int tx;
@@ -1317,125 +1334,75 @@ const int stride  //stride per thread
 	tx = threadIdx.x;
 	b_dim = blockDim.x;
 	bx = blockIdx.x;
-	//
+
 	//extern __shared__ T shared[];
     struct __dynamic_shmem__<T> shmem; 
     T *shared = shmem.getPtr();
         
-	T* sh_w=shared;				
-	T* sh_v=sh_w+2*b_dim;				
-	T* sh_x=sh_v+2*b_dim;			
+	T* sh_w = shared;				
+	T* sh_v = sh_w + 2*b_dim;				
+	T* sh_x = sh_v + 2*b_dim;			
 	
-	//a ~~ w
-	//b ~~ I
-	//c ~~ v
-	//d ~~ x
+	// a ~~ w
+	// b ~~ I
+	// c ~~ v
+	// d ~~ x
 	
 	int base = bx*stride*b_dim;
 	
-	//load halo to scratchpad
-	sh_w[tx] = w[base+tx];
-	sh_w[tx+b_dim] = w[base+tx+(stride-1)*b_dim];
-	sh_v[tx] = v[base+tx];
-	sh_v[tx+b_dim] = v[base+tx+(stride-1)*b_dim];
-	sh_x[tx] = x[base+tx];
-	sh_x[tx+b_dim] = x[base+tx+(stride-1)*b_dim];
+	// load halo to scratchpad
+	sh_w[tx] 		= w[base+tx];
+	sh_w[tx+b_dim] 	= w[base+tx+(stride-1)*b_dim]; // w is data marshaled, so we have (stride-1)*b_dim
+	sh_v[tx] 		= v[base+tx];
+	sh_v[tx+b_dim] 	= v[base+tx+(stride-1)*b_dim];
+	sh_x[tx] 		= x[base+tx];
+	sh_x[tx+b_dim] 	= x[base+tx+(stride-1)*b_dim];
 	
 	__syncthreads();
 
-
-
-	
 	int scaler = 2;
-	
-	while(scaler<=b_dim)
+
+	while(scaler <= b_dim)
 	{
 		if(tx < b_dim/scaler)
 		{
 			int index;
 			int up_index;
 			int down_index;
-			index = scaler*tx+scaler/2-1;
+			index = scaler*tx + scaler/2 - 1;
 			up_index= scaler*tx;
-			down_index = scaler*tx + scaler-1;
+			down_index = scaler*tx + scaler - 1;
 			T det = cuGet<T>(1);
-			det = cuFma( cuNeg(sh_v[index+b_dim]), sh_w[index+1], det);
-			det = cuDiv( cuGet<T>(1) , det);
+			det = cuFma(cuNeg(sh_v[index+b_dim]), sh_w[index+1], det);
+			det = cuDiv(cuGet<T>(1), det);
 			
-			T d1,d2;
+			T d1, d2;
 			d1 = sh_x[index+b_dim];
 			d2 = sh_x[index+1];
 			
-            sh_x[index+b_dim] = cuMul( cuFma( sh_v[index+b_dim], cuNeg(d2), d1), det);
-            sh_x[index+1]     = cuMul( cuFma(sh_w[index+1],cuNeg(d1), d2), det);			
-            sh_w[index+1] = cuMul( sh_w[index+b_dim], cuMul(sh_w[index+1], cuNeg(det)));	            
-			sh_w[index+b_dim] = cuMul(sh_w[index+b_dim],det);
+            sh_x[index+b_dim] = cuMul(cuFma(sh_v[index+b_dim], cuNeg(d2), d1), det);
+            sh_x[index+1]     = cuMul(cuFma(sh_w[index+1], cuNeg(d1), d2), det);			
+            sh_w[index+1] 	  = cuMul(sh_w[index+b_dim], cuMul(sh_w[index+1], cuNeg(det)));	            
+			sh_w[index+b_dim] = cuMul(sh_w[index+b_dim], det);
 									
 			sh_v[index+b_dim] = cuMul(sh_v[index+b_dim], cuMul(sh_v[index+1], cuNeg(det)));            
-			sh_v[index+1] = cuMul(sh_v[index+1],det);
+			sh_v[index+1] 	  = cuMul(sh_v[index+1], det);
 			
 			
-			//boundary
-            sh_x[up_index] 		= cuFma( sh_x[index+1], cuNeg(sh_v[up_index]), sh_x[up_index]);            
-			sh_x[down_index+b_dim] = cuFma(sh_x[index+b_dim], cuNeg(sh_w[down_index+b_dim]), sh_x[down_index+b_dim]);
+			// boundary
+            sh_x[up_index] 			= cuFma(sh_x[index+1], cuNeg(sh_v[up_index]), sh_x[up_index]);            
+			sh_x[down_index+b_dim] 	= cuFma(sh_x[index+b_dim], cuNeg(sh_w[down_index+b_dim]), sh_x[down_index+b_dim]);
             
-            sh_w[up_index] = cuFma( sh_w[index+1], cuNeg(sh_v[up_index]), sh_w[up_index]);
-			
-			sh_v[up_index] 		= cuMul( cuNeg(sh_v[index+1]), sh_v[up_index]);
+            sh_w[up_index] = cuFma(sh_w[index+1], cuNeg(sh_v[up_index]), sh_w[up_index]);
+			sh_v[up_index] = cuMul(cuNeg(sh_v[index+1]), sh_v[up_index]);
 
             sh_v[down_index+b_dim] = cuFma(sh_v[index+b_dim], cuNeg(sh_w[down_index+b_dim]), sh_v[down_index+b_dim]);
-			
-            sh_w[down_index+b_dim] 	= cuMul( cuNeg(sh_w[index+b_dim]), sh_w[down_index+b_dim]);
+            sh_w[down_index+b_dim] = cuMul( cuNeg(sh_w[index+b_dim]), sh_w[down_index+b_dim]);
 			
 		}
 		scaler*=2;
 		__syncthreads();
 	}
-	
-	//write out
-	
-/*
-	scaler = b_dim/2;
-	
-	while(scaler>=2)
-	{
-		if(tx < b_dim/scaler)
-		{
-			int index;
-			int up_index;
-			int down_index;
-			index = scaler*tx+scaler/2-1;
-			up_index= scaler*tx-1;
-			down_index = scaler*tx + scaler;
-			//up_index=up_index<0?0:up_index;
-		//	down_index=down_index<len?down_index:len-1;
-		
-			double up_value,down_value;
-			up_value = up_index<0? 0.0: sh_x[up_index+b_dim];
-			down_value = down_index<b_dim?sh_x[down_index]:0.0;
-			sh_x[index+b_dim] -= sh_w[index+b_dim]*up_value+sh_v[index+b_dim]*down_value;
-			sh_x[index+1]   -= sh_w[index+1]*up_value+sh_v[index+1]*down_value;
-			
-			double temp_1,temp_2;
-			temp_1 = sh_w[index+b_dim];
-			temp_2 = sh_w[index+1];		
-			
-			
-			up_value = up_index<0? 0.0: sh_w[up_index+b_dim];
-			down_value = down_index<b_dim?sh_w[down_index]:0.0;
-			sh_w[index+b_dim] = -sh_w[index+b_dim] *up_value-sh_v[index+b_dim]*down_value;
-			sh_w[index+1] = -sh_w[index+1] *up_value-sh_v[index+1]*down_value;
-			
-			up_value = up_index<0? 0.0: sh_v[up_index+b_dim];
-			down_value = down_index<b_dim?sh_v[down_index]:0.0;
-			sh_v[index+b_dim] = -temp_1 *up_value-sh_v[index+b_dim]*down_value;
-			sh_v[index+1] = -temp_2 *up_value-sh_v[index+1]*down_value;
-			
-		}
-		scaler/=2;
-		__syncthreads();
-	}
-	*/
 	
 	w[base+tx] =sh_w[tx];
 	w[base+tx+(stride-1)*b_dim] = sh_w[tx+b_dim];
@@ -1447,7 +1414,7 @@ const int stride  //stride per thread
 	x[base+tx+(stride-1)*b_dim] = sh_x[tx+b_dim];
 	
 	//write mirror
-	if(tx<1)
+	if(tx < 1)
 	{
 		int g_dim=gridDim.x;
 		w_mirror[bx] = sh_w[0];
@@ -1459,7 +1426,6 @@ const int stride  //stride per thread
 		x_mirror[bx] = sh_x[0];
 		x_mirror[g_dim+bx] = sh_x[2*b_dim-1];
 	}
-
 }
 
 
