@@ -556,28 +556,9 @@ int main(int argc, char **argv)
 	test_gtsv_v1<double, double>(m);	
     printf("Finished GTSV testing using double\n\n");
 	printf("-------------------------------------------\n");
-	exit(1);
 	printf("GTSV testing using double and multiple RHS ...\n");
 	test_gtsv_v_few<double,double>(m,k);
     printf("Finished GTSV testing multiple RHS\n\n");
-	
-	/*
-    printf("Double complex test_gtsv 5 rhs testing\n");    
-	test_gtsv_v_few<cuDoubleComplex,double>(m,5);    
-    printf("END Double complex test_gtsv 5 rhs\n");
-    
-	
-	
-	printf("double test_dtsvb_v1 testing\n");
-	test_dtsvb_v1<double,double>(m);
-	
-	printf("double complex test_dtsvb_v1 testing\n");
-	test_dtsvb_v1<cuDoubleComplex,double>(m);
-	
-	*/	
-	//printf("float testing\n");
-	//test_dtsvb_v1<float>(m);
-  
-	return 0;
 
+	return 0;
 }
