@@ -143,11 +143,32 @@ __global__ void  back_marshaling_bxb (
 
 
 // Partitioned solver with tiled diagonal pivoting. Solves for V_i, W_i, Y_i (the modified rhs)
-// Each thread works on 'h_stride' elements
+// Each thread works on 'h_stride' elements.
 // In the padded tridiagonal matrix, a thread works on 'h_stride' consecutive rows.
 // T_ELEM_REAL to hold the type of sigma (it is necesary for complex variants)
 // All arrays (d, dl, du, b, v, w, c2) are data marshaled.
 // tiled_diag_pivot_x1<T,T_REAL><<<s, b_dim>>>(b_buffer, w_buffer, v_buffer, c2_buffer, flag, dl_buffer, d_buffer, du_buffer, stride, tile);
+// The strategy adopted here: dynamic tiling approach - illustrated below 
+// k = 0
+// for(i=0; i<T; i++) {
+// 	n_barrier=(i+1)*n/T
+// 	while(k<n_barrier) {
+// 		if(condition) {
+// 			1-by-1 pivoting
+// 			k+=1
+// 		} 
+// 		else {
+// 			2-by-2 pivoting
+// 			k+=2
+// 		}
+// 	}
+// 	barrier for a warp*
+// }
+
+// Tridiagonal matrix A is recursively decomposed using LBM^T factorization. 
+// In every step, the following operations are done: (here, f is rhs vector)
+// 1) Solve Lz = f, 2) Then solve By = z, and 3) Finally, M^Tx = y
+
 template <typename T_ELEM , typename T_ELEM_REAL> 
 __global__ void tiled_diag_pivot_x1(
                                       T_ELEM* x,			// rhs array (b_buffer)
@@ -182,7 +203,7 @@ __global__ void tiled_diag_pivot_x1(
 	// elements in the first row
 	b_k = b[ix];
 	c_k = c[ix];
-	//x_k = d[ix];
+	// x_k = d[ix];
     x_k = x[ix];
 	w_k = a[ix];
 	
@@ -190,18 +211,18 @@ __global__ void tiled_diag_pivot_x1(
 	a_k_1 = a[ix+b_dim];
 	b_k_1 = b[ix+b_dim];
 	c_k_1 = c[ix+b_dim];
-	//x_k_1 = d[ix+b_dim];
+	// x_k_1 = d[ix+b_dim];
     x_k_1 = x[ix+b_dim];
 	
 	// element in the third row
 	a_k_2 = a[ix+2*b_dim];
-		
+	
 	int i;
 
 	// forward
 	for(i=1; i<=tile; i++) // dynamic tiling approach 
 	{
-		while(k < (stride*i)/tile) // loop runs as long as k < stride
+		while(k < (stride*i)/tile)
 		{        
 			T_ELEM_REAL sigma;
 			
@@ -238,7 +259,7 @@ __global__ void tiled_diag_pivot_x1(
 						b_k_1 = b[ix+b_dim];  // k+2 row
 						a_k_1 = a_k_2;		  // k+2 row
 						// x_k_1 = d[ix+b_dim];
-                        x_k_1 = x[ix+b_dim];  // k+1 row
+                        x_k_1 = x[ix+b_dim];  // k+2 row
 						c_k   = c_k_1;		  // k+1 row
 						c_k_1 = c[ix+b_dim];  // k+2 row
 						
@@ -386,20 +407,20 @@ __global__ void tiled_diag_pivot_x1(
 				b_k_1 = b_buffer[ix];
 				c_k_1 = c[ix];
                 delta = cuFma(b_k, b_k_1, cuNeg(cuMul(c_k, a_k_1)));
-				delta = cuDiv(cuGet<T_ELEM>(1), delta );	                
+				delta = cuDiv(cuGet<T_ELEM>(1), delta);	                
                 
                 T_ELEM prod = cuMul(c_k_1, cuMul(b_k, delta));
                 
 				x[ix] = cuFma(cuNeg(x_k_1), prod, x[ix]);
 				w[ix] = cuFma(cuNeg(w_k_1), prod, w[ix]);
-				v[ix] = cuMul(cuNeg(v_k_1),prod);
+				v[ix] = cuMul(cuNeg(v_k_1), prod);
 				
                 ix   -= b_dim;
                 prod  = cuMul(c_k_1, cuMul(c_k, delta));
                 
                 x_k_1 = cuFma(x_k_1, prod, x[ix]);
                 w_k_1 = cuFma(w_k_1, prod, w[ix]);
-                v_k_1 = cuMul(v_k_1, prod); 
+                v_k_1 = cuMul(v_k_1, prod);
                 x[ix] = x_k_1;
                 w[ix] = w_k_1;                 
                 v[ix] = v_k_1; 

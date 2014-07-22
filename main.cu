@@ -32,6 +32,8 @@ OR THE USE OR OTHER DEALINGS WITH THE SOFTWARE.
 #include <sys/time.h>
 #include <sys/resource.h>
 #include <sys/sysinfo.h>
+#include <helper_string.h>    // helper for string parsing
+#include <helper_cuda.h>      // helper for cuda error checking functions
 
 #define DEBUG 0
 
@@ -477,34 +479,81 @@ void test_dtsvb_v1(int m)
 	compare_result<T,T_REAL>(h_b,h_b_back,1,m,1,1e-10,1e-10,50,3,b_dim);
 }
 
-
-
-int main(int argc, char *argv[])
+void
+showHelp()
 {
-	// m is matrix size
-	// this means that the number of rows in matrix is equal to m.       
-	int m; // m is given as 1st arg
-	m = 512*1024+512; // equals 524800 = 0.53M
-    //m = 1024;
-    // k is rhs
-    int k; // k is given in 2nd arg
-	k = 2;
-	
-    if (argc > 1) {
-		if(argc >= 2)
-		{
-			m = atoi( argv[1] );
-			if(argc >= 3)
-			{
-				k = atoi( argv[2] );
-			}
-		}
+    printf("\nTridiagonal Solver : Command line options\n");
+    printf("\t-device=n          (where n=0,1,2.... for the GPU device)\n\n");
+    printf("> The default matrix size can be overridden with these parameters\n");
+    printf("\t-size=row_dim_size (matrix row    dimensions)\n");
+    printf("\t-rhs=number_of_rhs_vectors\n");
+}
+
+int main(int argc, char **argv)
+{
+	if (checkCmdLineFlag(argc, (const char **)argv, "help"))
+    {
+        showHelp();
+        return 0;
     }
-	printf ( "\nmatrix size = %d and rhs is %d \n", m,k);
+
+    int m, k, devID = findCudaDevice(argc, (const char **)argv);
+    cudaDeviceProp deviceProp;
+
+    // get number of SMs on this GPU
+    checkCudaErrors(cudaGetDevice(&devID));
+    checkCudaErrors(cudaGetDeviceProperties(&deviceProp, devID));
+	
+	printf("> Device %d: \"%s\"\n", devID, deviceProp.name);
+    printf("> SM Capability %d.%d detected.\n", deviceProp.major, deviceProp.minor);
+	
+    if (checkCmdLineFlag(argc, (const char **)argv, "size"))
+    {
+        m = getCmdLineArgumentInt(argc, (const char **)argv, "size=");
+
+        if (m < 0)
+        {
+            printf("Invalid command line parameter\n ");
+            exit(EXIT_FAILURE);
+        }
+        else
+        {
+            if (m < 10)
+            {
+                printf("Enter m value which is greater than 10. Exiting...\n");
+                exit(EXIT_FAILURE);
+            }
+        }
+    }
+    else
+        m = 512*1024+512;
+
+    if (checkCmdLineFlag(argc, (const char **)argv, "rhs"))
+    {
+        k = getCmdLineArgumentInt(argc, (const char **)argv, "rhs=");
+
+        if (k < 0)
+        {
+            printf("Invalid command line parameter\n ");
+            exit(EXIT_FAILURE);
+        }
+        else
+        {
+            if (k > 3)
+            {
+                printf("k value should be less than 3. Exiting...\n");
+                exit(EXIT_FAILURE);
+            }
+        }
+    }
+    else
+        k = 2;
+
+	printf("\nmatrix size = %d and rhs is %d \n", m, k);
     
 	printf("-------------------------------------------\n");
 	printf("GTSV testing using double ...\n");
-	test_gtsv_v1<double,double>(m);	
+	test_gtsv_v1<double, double>(m);	
     printf("Finished GTSV testing using double\n\n");
 	printf("-------------------------------------------\n");
 	exit(1);

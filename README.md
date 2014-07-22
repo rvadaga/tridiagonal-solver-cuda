@@ -1,4 +1,4 @@
-Tridiagonal-solver-cuda
+Tridiagonal Matrix Solver using CUDA
 =======================
 
 A scalable, numerically stable tridiagonal solver implemented using NVidia CUDA.
