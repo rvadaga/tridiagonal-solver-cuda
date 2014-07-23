@@ -204,10 +204,10 @@ void gtsv_randomMatrix(int m)
 	
 	for(int k = 1; k < m-1; k++)
 	{
-		h_dl[k] =cuGet<T>( (rand()/(double)RAND_MAX)*2.0-1.0);
-		h_du[k] =cuGet<T>( (rand()/(double)RAND_MAX)*2.0-1.0);
-		h_d[k]  =cuGet<T>( (rand()/(double)RAND_MAX)*2.0-1.0);
-		h_b[k]  =cuGet<T>( (rand()/(double)RAND_MAX)*2.0-1.0);
+		h_dl[k] = cuGet<T>( (rand()/(double)RAND_MAX)*2.0-1.0);
+		h_du[k] = cuGet<T>( (rand()/(double)RAND_MAX)*2.0-1.0);
+		h_d[k]  = cuGet<T>( (rand()/(double)RAND_MAX)*2.0-1.0);
+		h_b[k]  = cuGet<T>( (rand()/(double)RAND_MAX)*2.0-1.0);
 	}
 	
 	
@@ -227,16 +227,7 @@ void gtsv_randomMatrix(int m)
 
   	//copy back the results to CPU
 	cudaMemcpy(h_x_gpu, b, m*sizeof(T), cudaMemcpyDeviceToHost);
-	/*template <typename T> 
-	void mv_test
-	(
-		T* x,				// result B
-		const T* a,			// lower diagonal
-		const T* b,			// diagonal
-		const T* c,			// upper diagonal
-		const T* d,			// variable vector
-		const int len,		// length of the matrix
-	)*/
+
     // mv_test computes B (h_b_back) in Ax = B where x is the result from the gpu
     mv_test<T>(h_b_back, h_dl, h_d, h_du, h_x_gpu, m);
     

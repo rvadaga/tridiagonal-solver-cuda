@@ -91,7 +91,7 @@ template <typename T, typename T_REAL>
 void gtsv_spike_partial_diag_pivot(const T* dl, const T* d, const T* du, T* b, const int m)
 {
 
-	printf("Running GTSV SPIKE.\n");
+	printf("\nRunning GTSV SPIKE.\n");
 	cudaFuncSetCacheConfig(tiled_diag_pivot_x1<T,T_REAL>,cudaFuncCachePreferL1);
 	// prefer larger L1 cache and smaller shared memory
 	cudaFuncSetCacheConfig(spike_GPU_back_sub_x1<T>,cudaFuncCachePreferL1);
@@ -132,7 +132,6 @@ void gtsv_spike_partial_diag_pivot(const T* dl, const T* d, const T* du, T* b, c
 	T* w_level_2;
 	T* v_level_2;
 	
-	
 	//buffer allocation
 	cudaMalloc((void **)&flag, 		sizeof(bool)*m_pad); 
 	cudaMalloc((void **)&dl_buffer, T_size*m_pad); 
@@ -166,6 +165,8 @@ void gtsv_spike_partial_diag_pivot(const T* dl, const T* d, const T* du, T* b, c
 	spike_GPU_back_sub_x1<T><<<s, b_dim>>>(b_buffer, w_buffer, v_buffer, x_level_2, stride);
 
 	back_marshaling_bxb<T><<<g_data, b_data, marshaling_share_size>>>(b, b_buffer, stride, b_dim, m);
+
+	printf("Solving done.\n\n");
 	
 	// free memory
 	cudaFree(flag);
