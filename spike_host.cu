@@ -20,6 +20,7 @@ THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLI
 #include <stdio.h>
 #include <stdlib.h>
 #include <cuda_runtime.h>
+#include <device_functions.h>
 
 #include "spike_kernel.hxx"
 
@@ -103,7 +104,13 @@ void gtsv_spike_partial_diag_pivot(const T* dl, const T* d, const T* du, T* b, c
 	int tile = 128;			// 
 	int tile_marshal = 16; 	// blockDim in each direction for data marshaling
 	int T_size = sizeof(T);	// size of datatype
-    
+    int *pivotingData;
+    int *h_pivotingData;
+
+    cudaMalloc((void **)&pivotingData, sizeof(int));
+    cudaMemset((void *)pivotingData, 0, sizeof(int));
+    h_pivotingData = (int *)malloc(sizeof(int));
+
     // finds appropriate gridSize for data marshaling (will be referred to as DM from now on)
     findBestGrid<T>( m, tile_marshal, &m_pad, &b_dim, &s, &stride);
    
@@ -155,7 +162,7 @@ void gtsv_spike_partial_diag_pivot(const T* dl, const T* d, const T* du, T* b, c
 	 
 	// partitioned solver
 	// tiled_diagonal_pivoting<<<s,b_dim>>>(x, w, v, c2_buffer, flag, dl,d,du,b, stride,tile);
-	tiled_diag_pivot_x1<T,T_REAL><<<s, b_dim>>>(b_buffer, w_buffer, v_buffer, c2_buffer, flag, dl_buffer, d_buffer, du_buffer, stride, tile);
+	tiled_diag_pivot_x1<T,T_REAL><<<s, b_dim>>>(b_buffer, w_buffer, v_buffer, c2_buffer, flag, dl_buffer, d_buffer, du_buffer, stride, tile, pivotingData);
 	
 	
 	// SPIKE solver
@@ -165,11 +172,13 @@ void gtsv_spike_partial_diag_pivot(const T* dl, const T* d, const T* du, T* b, c
 	spike_GPU_back_sub_x1<T><<<s, b_dim>>>(b_buffer, w_buffer, v_buffer, x_level_2, stride);
 
 	back_marshaling_bxb<T><<<g_data, b_data, marshaling_share_size>>>(b, b_buffer, stride, b_dim, m);
-
+	cudaMemcpy(h_pivotingData, pivotingData, sizeof(int), cudaMemcpyDeviceToHost);
+	printf("No of 1 by 1 pivotings done = %d.\n", *h_pivotingData);
 	printf("Solving done.\n\n");
 	
 	// free memory
 	cudaFree(flag);
+	cudaFree(pivotingData);
 	cudaFree(dl_buffer);
 	cudaFree(d_buffer);
 	cudaFree(du_buffer);

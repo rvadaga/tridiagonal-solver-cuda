@@ -24,6 +24,7 @@ OR THE USE OR OTHER DEALINGS WITH THE SOFTWARE.
 
 
 #include <stdio.h>
+#include <complex.h>
 #include <stdlib.h>
 #include <cuda_runtime.h>
 #include <cuComplex.h>
@@ -36,7 +37,7 @@ OR THE USE OR OTHER DEALINGS WITH THE SOFTWARE.
 #include <helper_cuda.h>      // helper for cuda error checking functions
 
 #define DEBUG 0
-
+#define PI 3.141592654
 static double get_second (void)
 {
     struct timeval tv;
@@ -143,11 +144,11 @@ void compare_result
 }
 
 //This is a testing gtsv function
-template <typename T, typename T_REAL> 
+template <typename T, typename T_REAL, typename T_COMPLEX> 
 void gtsv_randomMatrix(int m)
 {
 	double start, stop; // timers
-	
+	int i;
 	// each array is a set of elements in a diagonal stored in contiguous mem locations.
 	T *h_dl; 	//	set of lower diagonal elements of mat A (n-1 elements)
 	T *h_d; 	//	diagonal elements of mat A (n elements)
@@ -162,7 +163,11 @@ void gtsv_randomMatrix(int m)
 	T *d;
 	T *du;
 	T *b;
+	T *h_Ex;
+	T_REAL *h_x;
+	T_REAL *h_n;
 
+	T_REAL dx = 0.08;
 	// allocation
 	// the vectors on the device are all set to zero
 	{
@@ -170,9 +175,23 @@ void gtsv_randomMatrix(int m)
 		h_du=(T *)malloc(sizeof(T)*m);
 		h_d=(T *)malloc(sizeof(T)*m);
 		h_b=(T *)malloc(sizeof(T)*m);
-		
 		h_x_gpu=(T *)malloc(sizeof(T)*m);
 		h_b_back=(T *)malloc(sizeof(T)*m);
+		h_n=(T_REAL *)malloc(sizeof(T_REAL)*(m+2));
+		h_Ex=(T *)malloc(sizeof(T)*(m+2));
+		h_x = (T_REAL *)malloc(sizeof(T_REAL)*(m+2));
+		T_REAL nCore = 1.5;
+		T_REAL nClad = 1.4;
+
+		for(i=0; i<m+2; i++)
+		{
+			if(i > 501 && i < 521)
+				h_n[i] = nCore;
+			else
+				h_n[i] = nClad;
+			h_x[i] = -20 + i*dx;
+			h_Ex[i] = exp(h_x[i]*h_x[i]/16);
+		}
 				
 		cudaMalloc((void **)&dl, sizeof(T)*m); 
 		cudaMalloc((void **)&du, sizeof(T)*m); 
@@ -184,30 +203,30 @@ void gtsv_randomMatrix(int m)
 		cudaMemset(du, 0, m * sizeof(T));
 	}
 	
-	srand(54321);
+	// B=2/(dx^2) + 4*1j*beta/dz - k0**2*(epsr[1:-1] - nref**2)
+	T gammaLeft = h_Ex[1]/h_Ex[2];
+	T gammaRight = h_Ex[m]/h_Ex[m-1];
 
-	// used for random number generation
-	// max value returned by srand is stored in RAND_MAX 
-	// generate random data
 	h_dl[0]   = cuGet<T>(0); 
-	// first elemenyt in sub-diagonal is equal to 0 
-	h_d[0]    = cuGet<T>( (rand()/(double)RAND_MAX)*2.0-1.0 );
-	h_du[0]   = cuGet<T>( (rand()/(double)RAND_MAX)*2.0-1.0);
-	h_dl[m-1] = cuGet<T>( (rand()/(double)RAND_MAX)*2.0-1.0);
-	h_d[m-1]  = cuGet<T>( (rand()/(double)RAND_MAX)*2.0-1.0);
+	// first element in sub-diagonal is equal to 0 
+	h_d[0]    = cuGet<T>(2/(dx*dx) + 4*I*(2*PI/1.55)*1.48 - (2*PI/1.55)*(2*PI/1.55)*( (h_n[1]*h_n[1]) - 1.48*1.48) - gammaLeft/(dx*dx));
+	h_du[0]   = cuGet<T>(-1/(dx*dx));
+	h_dl[m-1] = cuGet<T>(-1/(dx*dx));
+	h_d[m-1]  = cuGet<T>(2/(dx*dx) + 4*I*(2*PI/1.55)*1.48 - (2*PI/1.55)*(2*PI/1.55)*( (h_n[1022]*h_n[1022]) - 1.48*1.48) - gammaRight/(dx*dx));
 	h_du[m-1] = cuGet<T>(0); 
 	// last element in super diagonal is equal to 0
 	// By following this convention, we can access elements of dl, du, d present in the same row by the row's index.
-
-	h_b[0]    = cuGet<T>( (rand()/(double)RAND_MAX)*2.0-1.0 );
-	h_b[m-1]  = cuGet<T>( (rand()/(double)RAND_MAX)*2.0-1.0 );
+	
+	// d=alphax + 4*1j*beta/dz + k0**2*(epsr[1:-1] - nref**2)
+	h_b[0]    = cuGet<T>((-2/(dx*dx) + 4*I*(2*PI/1.55)*1.48 + (2*PI/1.55)*(2*PI/1.55)*( (h_n[1]*h_n[1]) - 1.48*1.48) + gammaLeft/(dx*dx)) * h_Ex[1] + 1/(dx*dx) *h_Ex[2]);
+	h_b[m-1]  = cuGet<T>((-2/(dx*dx) + 4*I*(2*PI/1.55)*1.48 + (2*PI/1.55)*(2*PI/1.55)*( (h_n[1022]*h_n[1022]) - 1.48*1.48) + gammaRight/(dx*dx)) * h_Ex[1022] + 1/(dx*dx) *h_Ex[1021]);
 	
 	for(int k = 1; k < m-1; k++)
 	{
-		h_dl[k] = cuGet<T>( (rand()/(double)RAND_MAX)*2.0-1.0);
-		h_du[k] = cuGet<T>( (rand()/(double)RAND_MAX)*2.0-1.0);
-		h_d[k]  = cuGet<T>( (rand()/(double)RAND_MAX)*2.0-1.0);
-		h_b[k]  = cuGet<T>( (rand()/(double)RAND_MAX)*2.0-1.0);
+		h_dl[k] = cuGet<T>(-1/(dx*dx));
+		h_du[k] = cuGet<T>(-1/(dx*dx));
+		h_d[k]  = cuGet<T>(2/(dx*dx) + 4*I*(2*PI/1.55)*1.48 - (2*PI/1.55)*(2*PI/1.55)*( (h_n[k+1]*h_n[k+1]) - 1.48*1.48));
+		h_b[k]  = cuGet<T>((-2/(dx*dx) + 4*I*(2*PI/1.55)*1.48 + (2*PI/1.55)*(2*PI/1.55)*( (h_n[k+1]*h_n[k+1]) - 1.48*1.48)) * h_Ex[k+1]+ (-2/(dx*dx) + 4*I*(2*PI/1.55)*1.48 + (2*PI/1.55)*(2*PI/1.55)*( (h_n[k]*h_n[k]) - 1.48*1.48)) * h_Ex[k] + (-2/(dx*dx) + 4*I*(2*PI/1.55)*1.48 + (2*PI/1.55)*(2*PI/1.55)*( (h_n[k+2]*h_n[k+2]) - 1.48*1.48)) * h_Ex[k+2]);
 	}
 	
 	
@@ -286,13 +305,13 @@ main(int argc, char **argv)
         }
     }
     else
-        m = 512*1024+512;
+        m = 1022;
 
 	printf("-------------------------------------------\n");
 	printf("Matrix height = %d\n", m);
 	printf("-------------------------------------------\n");
 	printf("GTSV solving using double ...\n");
-	gtsv_randomMatrix<double, double>(m);
+	gtsv_randomMatrix<cuDoubleComplex, double>(m);
     printf("Finished GTSV solving using double\n");
 	printf("-------------------------------------------\n");
 

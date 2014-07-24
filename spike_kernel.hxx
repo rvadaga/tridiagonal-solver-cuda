@@ -181,7 +181,8 @@ __global__ void tiled_diag_pivot_x1(
                                       const T_ELEM* b,    	// main diagonal (d_buffer)
                                       const T_ELEM* c,    	// upper diagonal (du_buffer)
                                       const int stride,		// h_stride (stride)
-                                      const int tile 		// tile
+                                      const int tile, 		// tile
+                                      int* pivotingData
                                       )                                    
 {
 	
@@ -284,7 +285,8 @@ __global__ void tiled_diag_pivot_x1(
 					ix   += b_dim;
 				}
 
-				k += 1;             							
+				k += 1;
+				atomicAdd(&pivotingData[0], 1);             							
 			}
 			
 			// do 2 by 2 pivoting ==> d = 2
