@@ -105,8 +105,8 @@ gaml=zeros(Npts,dtype='complex')
 kxbr=zeros(Npts,dtype='complex')
 kxbl=zeros(Npts,dtype='complex')
 
-gamr[0]=Ex[-2]/Ex[-3]
-gaml[0]=Ex[1]/Ex[2]
+gamr[0]=0#Ex[-2]/Ex[-3]
+gaml[0]=0#Ex[1]/Ex[2]
 
 B=-alphax+4*1j*beta/dz-k0**2*(epsr[1:-1]-nref**2)
 b0=B[0]
@@ -115,7 +115,7 @@ d=alphax+4*1j*beta/dz+k0**2*(epsr[1:-1]-nref**2)
 
 t1=t.time()
 k=0
-for i in range(1,Npts):
+for i in range(1,2):
     
     B[0]=b0-gaml[i-1]*alphaw[0]
     B[-1]=b1-gamr[i-1]*alphae[-1]
@@ -126,16 +126,16 @@ for i in range(1,Npts):
     Ex[1:-1]=c_TDMA_Solver(-alphaw[:-1],B,-alphae[1:],D)
     
     # Simple TBC    
-    gamr[i]=Ex[-2]/Ex[-3]
-    kxbr[i]=-1/(1j*dx)*log(gamr[i])
-    if(real(kxbr[i])<0):
-        kxbr[i]=0+1j*imag(kxbr[i])
-        gamr[i]=exp(-1j*kxbr[i]*dx)
-    gaml[i]=Ex[1]/Ex[2]
-    kxbl[i]=-1/(1j*dx)*log(gaml[i])
-    if(real(kxbl[i])<0):
-        kxbl[i]=0+1j*imag(kxbl[i])
-        gaml[i]=exp(-1j*kxbl[i]*dx)
+    # gamr[i]=Ex[-2]/Ex[-3]
+    # kxbr[i]=-1/(1j*dx)*log(gamr[i])
+    # if(real(kxbr[i])<0):
+    #     kxbr[i]=0+1j*imag(kxbr[i])
+    #     gamr[i]=exp(-1j*kxbr[i]*dx)
+    # gaml[i]=Ex[1]/Ex[2]
+    # kxbl[i]=-1/(1j*dx)*log(gaml[i])
+    # if(real(kxbl[i])<0):
+    #     kxbl[i]=0+1j*imag(kxbl[i])
+        # gaml[i]=exp(-1j*kxbl[i]*dx)
         
     Ex[0]=Ex[1]*gaml[i]
     Ex[-1]=Ex[-2]*gamr[i]
@@ -177,6 +177,5 @@ ylabel('Power')
 figure(5)
 semilogy(kz,abs(P),'r')
 xlabel('$k_z$')
-
 
 show()

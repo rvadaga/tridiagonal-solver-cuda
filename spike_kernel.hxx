@@ -25,7 +25,6 @@ OR THE USE OR OTHER DEALINGS WITH THE SOFTWARE.
 #include "cuComplex.h"
 #include "cusparse_ops.hxx"
 
-
 // Data layout transformation for inputs
 // dim3 g_data(b_dim/tile_marshal (8), s (32));
 // dim3 b_data(tile_marshal (16), tile_marshal (16));
@@ -49,7 +48,7 @@ __global__ void forward_marshaling_bxb ( T* x,					// output array
 	// Consider the input array (which is a set of elements in the tridiagonal matrix) arranged as a matrix of
 	// width h_stride. The matrix is padded with 'pad' such that it's size becomes equal to m_pad.
 	// Now, the height of the matrix is m_pad/h_stride. This matrix is divided into blocks of size (h_stride x l_stride). 
-	// This fnxn does a local transpose of the these blocks. Each block is further divided into sub-blocks of size (h_stride x
+	// This fnxn does a local transpose of these blocks. Each block is further divided into sub-blocks of size (h_stride x
 	// bdx). Therefore, each block is horizontally divided into l_stride/bdx sub-blocks i.e. each block has l_stride/bdx 
 	// sub-blocks arranged vertically. Note that l_stride has to be an integral multiple of bdx. Each thread block 
 	// works on a single sub-block. There are tile_marshal * tile_marshal threads in a thread block. So, each thread
@@ -138,7 +137,7 @@ __global__ void  back_marshaling_bxb (
         }
 		global_out+=bdx;
 		__syncthreads();
-	}		
+	}
 }
 
 
@@ -817,3 +816,44 @@ const int stride
         x[base+tx+k*b_dim] = cuFma(v[base+tx+k*b_dim], cuNeg(x_down), x[base+tx+k*b_dim]);
 	}
 }
+
+// template<typename T>
+// __global__ void multiply(const T* a, const T* b, const T* c, const T* x, const T* d)
+// {
+// 	struct __dynamic_shmem__<T> shmem; 
+//     T *share = shmem.getPtr();
+	
+// 	bx = blockIdx.x;
+// 	b_dim = blockDim.x;
+// 	ix = bx*stride*b_dim + threadIdx.x;
+
+// 	int k = 0; // k denotes row index
+	
+// 	T a_k, b_k, c_k, x_k_1, x_k_2, x_k_3;
+// 	a_k = a[ix];
+// 	b_k = b[ix];
+// 	c_k = c[ix];
+// 	x_k_1 = x[ix];
+// 	x_k_2 = x[ix+b_dim];
+// 	x_k_3 = x[ix+b_dim];
+
+// 	int i;
+
+// 	for(i=1; i<=tile; i++) // dynamic tiling approach 
+// 	{
+// 		while(k < (stride*i)/tile)
+// 		{
+// 			d_k = cuAdd(d_k, cuMul(a_k, x_k_1));
+// 			d_k = cuAdd(d_k, cuMul(b_k, x_k_2));
+// 			d_k = cuAdd(d_k, cuMul(c_k, x_k_3));
+// 			d[ix] = d_k;
+// 			x_k_1 = x_k_2;
+// 			x_k_2 = x_k_3;
+// 			ix += b_dim;
+// 			k += b_dim;
+// 			x_k_3 = x[ix+b_dim];
+
+// 		}
+
+
+// }
