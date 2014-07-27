@@ -23,83 +23,116 @@ THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLI
 #include <device_functions.h>
 #include "datablock.h"
 #include "spike_kernel.hxx"
+#include "cusparse_ops.hxx"
 
 template <typename T, typename T_REAL> 
 void gtsv_spike_partial_diag_pivot(Datablock<T, T_REAL> *data, const T* dl, const T* d, const T* du, T* b, const int m)
 {
-	printf("\nRunning GTSV SPIKE.\n");
-	
-	// prefer larger L1 cache and smaller shared memory
-	cudaFuncSetCacheConfig(tiled_diag_pivot_x1<T,T_REAL>,cudaFuncCachePreferL1);
-	cudaFuncSetCacheConfig(spike_GPU_back_sub_x1<T>,cudaFuncCachePreferL1);
-	
-	// variables for finding no of 1 by 1 pivotings
-	int *h_pivotingData;
-	int *pivotingData;
-
-    	h_pivotingData = (int *)malloc(sizeof(int));
-	checkCudaErrors(cudaMalloc((void **)&pivotingData, sizeof(int)));
-    	checkCudaErrors(cudaMemset((void *)pivotingData, 0, sizeof(int)));
-
-    	T* dl_buffer 	= data->dl_buffer;  	// lower digonal after DM
-	T* d_buffer  	= data->d_buffer;  	// digonal after DM
-	T* du_buffer	= data->du_buffer; 	// upper diagonal after DM
-	T* b_buffer	= data->b_buffer;	// B array after DM (here, B is in Ax = B)
-	T* w_buffer	= data->w_buffer;	// W in A_i * W_i = vector w/ partition's lower diagonal element
-	T* v_buffer	= data->v_buffer;	// V in A_i * V_i = vector w/ partition's upper diagonal element
-	T* c2_buffer	= data->c2_buffer;	// stores modified diagonal elements in diagonal pivoting method
-	bool *flag	= data->flag; 
+    printf("\nRunning GTSV SPIKE.\n");
     
-	T* x_level_2 = data->x_level_2;
-	T* w_level_2 = data->w_level_2;
-	T* v_level_2 = data->v_level_2;
+    // prefer larger L1 cache and smaller shared memory
+    cudaFuncSetCacheConfig(tiled_diag_pivot_x1<T,T_REAL>,cudaFuncCachePreferL1);
+    cudaFuncSetCacheConfig(spike_GPU_back_sub_x1<T>,cudaFuncCachePreferL1);
+    
+    // variables for finding no of 1 by 1 pivotings
+    int *h_pivotingData;
+    int *pivotingData;
 
-	int local_reduction_share_size	= data->local_reduction_share_size; 	
-	int global_share_size		= data->global_share_size;		
-	int local_solving_share_size	= data->local_solving_share_size;
-	int marshaling_share_size	= data->marshaling_share_size;
+    h_pivotingData = (int *)malloc(sizeof(int));
+    checkCudaErrors(cudaMalloc((void **)&pivotingData, sizeof(int)));
+    checkCudaErrors(cudaMemset((void *)pivotingData, 0, sizeof(int)));
 
-	dim3 gridDim  = data->gridDim;
-	dim3 blockDim = data->blockDim;
+    T* dl_buffer    = data->dl_buffer;    // lower digonal after DM
+    T* d_buffer     = data->d_buffer;     // diagonal after DM
+    T* du_buffer    = data->du_buffer;    // upper diagonal after DM
+    T* b_buffer     = data->b_buffer;     // B array after DM (here, B is in Ax = B)
+    T* w_buffer     = data->w_buffer;     // W in A_i * W_i = vector w/ partition's lower diagonal element
+    T* v_buffer     = data->v_buffer;     // V in A_i * V_i = vector w/ partition's upper diagonal element
+    T* c2_buffer    = data->c2_buffer;    // stores modified diagonal elements in diagonal pivoting method
+    bool *flag      = data->flag; 
+    
+    T* x_level_2 = data->x_level_2;
+    T* w_level_2 = data->w_level_2;
+    T* v_level_2 = data->v_level_2;
 
-	int s 		= data->s;
-	int b_dim	= data->b_dim;
-	int stride	= data->h_stride;
-	int tile 	= 128;
-    	
-	// T* d_gammaLeft;
-	// T* d_gammaRight;
-	// T* dx_2Inv;
-	// T* d_dx_2Inv;
+    int local_reduction_share_size  = data->local_reduction_share_size;     
+    int global_share_size           = data->global_share_size;      
+    int local_solving_share_size    = data->local_solving_share_size;
+    int marshaling_share_size       = data->marshaling_share_size;
 
-	// cudaMalloc((void **)&d_gammaLeft, sizeof(T));
-	// cudaMalloc((void **)&d_gammaRight, sizeof(T));
-	// cudaMalloc((void **)&d_dx_2Inv, sizeof(T_REAL));
+    dim3 gridDim  = data->gridDim;
+    dim3 blockDim = data->blockDim;
 
-	//kernels 
-	//data layout transformation
-	forward_marshaling_bxb<T><<<gridDim, blockDim, marshaling_share_size>>>(dl_buffer, dl, stride, b_dim, m, cuGet<T>(0));
-	forward_marshaling_bxb<T><<<gridDim, blockDim, marshaling_share_size>>>(d_buffer,  d,  stride, b_dim, m, cuGet<T>(1));
-	forward_marshaling_bxb<T><<<gridDim, blockDim, marshaling_share_size>>>(du_buffer, du, stride, b_dim, m, cuGet<T>(0));
-	forward_marshaling_bxb<T><<<gridDim, blockDim, marshaling_share_size>>>(b_buffer,  b,  stride, b_dim, m, cuGet<T>(0));
-	 
-	// partitioned solver
-	// tiled_diagonal_pivoting<<<s,b_dim>>>(x, w, v, c2_buffer, flag, dl,d,du,b, stride,tile);
-	tiled_diag_pivot_x1<T,T_REAL><<<s, b_dim>>>(b_buffer, w_buffer, v_buffer, c2_buffer, flag, dl_buffer, d_buffer, du_buffer, stride, tile, pivotingData);
-	
-	// SPIKE solver
-	spike_local_reduction_x1<T><<<s, b_dim, local_reduction_share_size>>>(b_buffer, w_buffer, v_buffer, x_level_2, w_level_2, v_level_2, stride);
-	spike_GPU_global_solving_x1<<<1, 32, global_share_size>>>(x_level_2, w_level_2, v_level_2, s);
-	spike_GPU_local_solving_x1<T><<<s, b_dim, local_solving_share_size>>>(b_buffer, w_buffer, v_buffer, x_level_2, stride);
-	spike_GPU_back_sub_x1<T><<<s, b_dim>>>(b_buffer, w_buffer, v_buffer, x_level_2, stride);
+    int s       = data->s;
+    int b_dim   = data->b_dim;
+    int stride  = data->h_stride;
+    int tile    = 128;
+    int marshaledIndex_1    = data->marshaledIndex_1;
+    int marshaledIndex_m_2  = data->marshaledIndex_m_2;
+    int marshaledIndex_m_1  = data->marshaledIndex_m_1;
+    
+    T *h_x_0    = data->h_x_0;
+    T *h_x_1    = data->h_x_1;
+    T *h_x_m_2  = data->h_x_m_2;
+    T *h_x_m_1  = data->h_x_m_1;
 
-	back_marshaling_bxb<T><<<gridDim, blockDim, marshaling_share_size>>>(b, b_buffer, stride, b_dim, m);
-	// cudaMemcpy(h_gammaLeft, d_gamma)
-	cudaMemcpy(h_pivotingData, pivotingData, sizeof(int), cudaMemcpyDeviceToHost);
-	printf("No of 1 by 1 pivotings done = %d.\n", *h_pivotingData);
-	printf("Solving done.\n\n");
-	// free pivotingData both h and dev
+    T* h_gammaLeft      = data->h_gammaLeft;
+    T* h_gammaRight     = data->h_gammaRight;
+    T* dx_2InvComplex   = data->dx_2InvComplex;
+
+    // cudaMalloc((void **)&d_gammaLeft, sizeof(T));
+    // cudaMalloc((void **)&d_gammaRight, sizeof(T));
+    // cudaMalloc((void **)&d_dx_2Inv, sizeof(T_REAL));
+
+    //kernels 
+    //data layout transformation
+    forward_marshaling_bxb<T><<<gridDim, blockDim, marshaling_share_size>>>(dl_buffer, dl, stride, b_dim, m, cuGet<T>(0));
+    forward_marshaling_bxb<T><<<gridDim, blockDim, marshaling_share_size>>>(d_buffer,  d,  stride, b_dim, m, cuGet<T>(1));
+    forward_marshaling_bxb<T><<<gridDim, blockDim, marshaling_share_size>>>(du_buffer, du, stride, b_dim, m, cuGet<T>(0));
+    forward_marshaling_bxb<T><<<gridDim, blockDim, marshaling_share_size>>>(b_buffer,  b,  stride, b_dim, m, cuGet<T>(0));
+     
+    // partitioned solver
+    // tiled_diagonal_pivoting<<<s,b_dim>>>(x, w, v, c2_buffer, flag, dl,d,du,b, stride,tile);
+    tiled_diag_pivot_x1<T,T_REAL><<<s, b_dim>>>(b_buffer, w_buffer, v_buffer, c2_buffer, flag, dl_buffer, d_buffer, du_buffer, stride, tile, pivotingData);
+    
+    // SPIKE solver
+    spike_local_reduction_x1<T><<<s, b_dim, local_reduction_share_size>>>(b_buffer, w_buffer, v_buffer, x_level_2, w_level_2, v_level_2, stride);
+    spike_GPU_global_solving_x1<<<1, 32, global_share_size>>>(x_level_2, w_level_2, v_level_2, s);
+    spike_GPU_local_solving_x1<T><<<s, b_dim, local_solving_share_size>>>(b_buffer, w_buffer, v_buffer, x_level_2, stride);
+    spike_GPU_back_sub_x1<T><<<s, b_dim>>>(b_buffer, w_buffer, v_buffer, x_level_2, stride);
+
+    checkCudaErrors(cudaMemcpy(h_x_0,   b_buffer,                    sizeof(T), cudaMemcpyDeviceToHost));
+    checkCudaErrors(cudaMemcpy(h_x_1,   b_buffer+marshaledIndex_1,   sizeof(T), cudaMemcpyDeviceToHost));
+    checkCudaErrors(cudaMemcpy(h_x_m_2, b_buffer+marshaledIndex_m_2, sizeof(T), cudaMemcpyDeviceToHost));
+    checkCudaErrors(cudaMemcpy(h_x_m_1, b_buffer+marshaledIndex_m_1, sizeof(T), cudaMemcpyDeviceToHost));
+    printf("h_x_0   = %E.\n", cuAbs(*h_x_0));
+    printf("h_x_1   = %E.\n", cuAbs(*h_x_1));
+    printf("h_x_m_2 = %E.\n", cuAbs(*h_x_m_2));
+    printf("h_x_m_1 = %E.\n", cuAbs(*h_x_m_1));
+    *h_gammaLeft     = cuDiv(*h_x_0, *h_x_1);
+    *h_gammaRight    = cuDiv(*h_x_m_1, *h_x_m_2);
+    //*h_x_1     = cuFma()
+
+    back_marshaling_bxb<T><<<gridDim, blockDim, marshaling_share_size>>>(b, b_buffer, stride, b_dim, m);
+    // cudaMemcpy(h_gammaLeft, d_gamma)
+    cudaMemcpy(h_pivotingData, pivotingData, sizeof(int), cudaMemcpyDeviceToHost);
+    printf("No of 1 by 1 pivotings done = %d.\n", *h_pivotingData);
+    printf("Solving done.\n\n");
+    // free pivotingData both h and dev
+    // use CheckCudaErrors for all cudaMallocs
 }
+
+// template <typename T, typename T_REAL> 
+// void update_entries(Datablock<T, T_REAL> *data, const T* dl, T* d, const T* du, T* b, const int m)
+// {
+
+// }
+
+// template <typename T, typename T_REAL> 
+// void update_entries(Datablock<T, T_REAL> *data, const T* dl, T* d, const T* du, T* b, const int m);
+// /* explicit instanciation */
+// template void update_entries<cuComplex, float>(Datablock<cuComplex, float> *data, const cuComplex* dl, cuComplex* d, const cuComplex* du, cuComplex* b, const int m);
+// template void update_entries<cuDoubleComplex, double>(Datablock<cuDoubleComplex, double> *data, const cuDoubleComplex* dl, cuDoubleComplex* d, const cuDoubleComplex* du, cuDoubleComplex* b, const int m);
 
 template <typename T, typename T_REAL> 
 void gtsv_spike_partial_diag_pivot(const T* dl, const T* d, const T* du, T* b, const int m);
