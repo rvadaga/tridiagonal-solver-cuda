@@ -374,6 +374,17 @@ template <> __inline__ __device__ __host__   cuDoubleComplex  cuGet<cuDoubleComp
     return (make_cuDoubleComplex( double(x), double(y) ));
 }
 
+//included lines 377:387
+template <typename T_ELEM> __inline__ __device__ __host__  T_ELEM cuGet (cuDoubleComplex);
+template <> __inline__ __device__ __host__  cuComplex cuGet<cuComplex>(cuDoubleComplex x)
+{
+    return (make_cuComplex((float)cuCreal(x), (float)cuCimag(x)));
+}
+
+template <> __inline__ __device__ __host__   cuDoubleComplex  cuGet<cuDoubleComplex>(cuDoubleComplex x)
+{
+    return x;
+}
 /*---------------------------------------------------------------------------------*/
 /* Equal */
 static __inline__ __device__ __host__  bool cuEqual( float x, float y )

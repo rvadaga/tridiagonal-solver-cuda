@@ -25,7 +25,7 @@ OBJS= main.o  spike_host.o
 # flags
 CFLAGS=
 CPPFLAGS= -O3
-NVFLAGS= -arch=sm_21 --ptxas-options=-v -Xptxas -dlcm=ca -O3
+NVFLAGS= -arch=sm_30 --ptxas-options=-v -Xptxas -dlcm=ca -O3 -g -G
 
 # final output
 BIN=solver
