@@ -62,8 +62,8 @@ class Datablock
         checkCudaErrors(cudaMalloc((void **)&c2_buffer,     T_size*m_pad)); 
         checkCudaErrors(cudaMalloc((void **)&bNew_buffer,   T_size*m_pad)); 
         checkCudaErrors(cudaMalloc((void **)&rhsUpdateArrayBuffer, T_size*m_pad)); 
-        checkCudaErrors(cudaMalloc((void **)&bottomElemBuffer, T_size*l_stride*s)); 
-        checkCudaErrors(cudaMalloc((void **)&topElemBuffer, T_size*l_stride*s)); 
+        checkCudaErrors(cudaMalloc((void **)&bottomElemBuffer, T_size*(l_stride+1)*s)); 
+        checkCudaErrors(cudaMalloc((void **)&topElemBuffer, T_size*(l_stride+1)*s)); 
         
         checkCudaErrors(cudaMalloc((void **)&x_level_2, T_size*s*2)); 
         checkCudaErrors(cudaMalloc((void **)&w_level_2, T_size*s*2)); 

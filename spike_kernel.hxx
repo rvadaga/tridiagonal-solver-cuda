@@ -288,7 +288,7 @@ __global__ void tiled_diag_pivot_x1(
                 }
 
                 k += 1;
-                atomicAdd(&pivotingData[0], 1);                                         
+                // atomicAdd(&pivotingData[0], 1);                                         
             }
             
             // do 2 by 2 pivoting ==> d = 2
@@ -823,22 +823,21 @@ const int stride
 template<typename T>
 __global__ void multiply_kernel(const T* d, const T* tElem, const T* bElem, const T* x, T *b, int stride, int tile)
 {
-    int bx = blockIdx.x;
-    int b_dim = blockDim.x;
-    int ix = bx*stride*b_dim + threadIdx.x;
-
-    int k = 0; // k denotes row index
-    T b_k; // for storing the kth element of new rhs array  
+    int bx       = blockIdx.x;
+    int b_dim    = blockDim.x;                      // equal to b_dim
+    int ix       = bx*stride*b_dim + threadIdx.x;   // for accessing diagonal, solved x and new b
+    int ixBuffer = bx*b_dim + threadIdx.x;          // for accessing tElem and bElem buffers
+    int k        = 0;                               // k denotes row index
+    T b_k;                                          // for storing the kth element of new rhs array  
 
     T d_k, x_k_1, x_k_2, x_k_3, x_k_last;
-    d_k = d[ix];
-    x_k_1 = tElem[ix];
-    x_k_2 = x[ix];
-    x_k_3 = x[ix+b_dim];
-    x_k_last = bElem[ix];
+    d_k     = d[ix];            // main diagonal element
+    x_k_1   = tElem[ixBuffer];  // term to be multiplied with ld[k]
+    x_k_2   = x[ix];            // term to be multiplied with d[k]
+    x_k_3   = x[ix+b_dim];      // term to be multiplied with ud[k]
+    x_k_last = bElem[ixBuffer]; // term to be multiplied with c[stride-1]
 
     int i;
-
     for(i=1; i<=tile; i++) // dynamic tiling approach 
     {
         while(k < (stride*i)/tile)

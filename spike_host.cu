@@ -114,6 +114,8 @@ void gtsv_spike_partial_diag_pivot(Datablock<T, T_REAL> *data, const T* dl, cons
     spike_GPU_global_solving_x1<<<1, 32, global_share_size>>>(x_level_2, w_level_2, v_level_2, s);
     spike_GPU_local_solving_x1<T><<<s, b_dim, local_solving_share_size>>>(b_buffer, w_buffer, v_buffer, x_level_2, stride);
     spike_GPU_back_sub_x1<T><<<s, b_dim>>>(b_buffer, w_buffer, v_buffer, x_level_2, stride);
+    cudaDeviceSynchronize();
+    checkCudaErrors(cudaGetLastError());
 
     checkCudaErrors(cudaMemcpy(h_x_0,   b_buffer,                    sizeof(T), cudaMemcpyDeviceToHost));
     checkCudaErrors(cudaMemcpy(h_x_1,   b_buffer+marshaledIndex_1,   sizeof(T), cudaMemcpyDeviceToHost));
@@ -127,52 +129,38 @@ void gtsv_spike_partial_diag_pivot(Datablock<T, T_REAL> *data, const T* dl, cons
     *h_gammaRight    = cuDiv(*h_x_m_1, *h_x_m_2);
     // *h_x_1     = cuFma()
 
+    // int blockSize = b_dim*stride;
+    // checkCudaErrors(cudaMemcpy((topElemBuffer+1), b_buffer + b_dim*(stride-1), sizeof(T)*b_dim, cudaMemcpyDeviceToDevice));
+    // checkCudaErrors(cudaMemcpy(topElemBuffer + b_dim + 1, b_buffer + b_dim*((2*stride) - 1), sizeof(T)*b_dim, cudaMemcpyDeviceToDevice));
+    // checkCudaErrors(cudaMemset((void *)topElemBuffer, 0, sizeof(T)));
+    // checkCudaErrors(cudaMemcpy(bottomElemBuffer, b_buffer, sizeof(T)*b_dim, cudaMemcpyDeviceToDevice));
+    // checkCudaErrors(cudaMemcpy(bottomElemBuffer + b_dim, b_buffer + blockSize, sizeof(T)*b_dim, cudaMemcpyDeviceToDevice));
+    // checkCudaErrors(cudaMemset(bottomElemBuffer + s*b_dim, 0, sizeof(T)));
+    // cudaDeviceSynchronize();
+    // checkCudaErrors(cudaGetLastError());
+    
     int blockSize = b_dim*stride;
-    checkCudaErrors(cudaMemcpyAsync(topElemBuffer, b_buffer + b_dim*(stride-1) - 1, sizeof(T)*b_dim, cudaMemcpyDeviceToDevice));
-    checkCudaErrors(cudaMemcpyAsync(topElemBuffer + b_dim, b_buffer + b_dim*stride - 1, sizeof(T), cudaMemcpyDeviceToDevice));
-    // checkCudaErrors(cudaMemcpyAsync(topElemBuffer + b_dim+1 + (s-2)*b_dim, b_buffer + b_dim*(2*stride - 1) + (s-2)*blockSize, sizeof(T)*(b_dim-1), cudaMemcpyDeviceToDevice));    
+    b_buffer += b_dim*(stride-1);
+    topElemBuffer += 1;
+    // TODO: change things like this to +=
+    // Also, time this thing on GPU/CPU? Check this.
+    for (int i=0; i<s; i++)
+    {
+        checkCudaErrors(cudaMemcpy(topElemBuffer + i*b_dim, b_buffer + i*blockSize, sizeof(T)*b_dim, cudaMemcpyDeviceToDevice));
+    }
+    b_buffer -= b_dim*(stride-1);
+    topElemBuffer -= 1;
     checkCudaErrors(cudaMemset(topElemBuffer, 0, sizeof(T)));
-    checkCudaErrors(cudaMemcpyAsync(bottomElemBuffer, b_buffer+1, sizeof(T)*(b_dim-1), cudaMemcpyDeviceToDevice));
-    // checkCudaErrors(cudaMemcpyAsync(bottomElemBuffer + b_dim-1, b_buffer + blockSize, sizeof(T)*b_dim, cudaMemcpyDeviceToDevice));
+
+    for (int i=0; i<s; i++)
+    {
+        checkCudaErrors(cudaMemcpy(bottomElemBuffer + i*b_dim, b_buffer + i*blockSize, sizeof(T)*b_dim, cudaMemcpyDeviceToDevice));
+    }
+    bottomElemBuffer += 1;
     checkCudaErrors(cudaMemset(bottomElemBuffer + s*b_dim - 1, 0, sizeof(T)));
 
-    // error may be @ bottomElemBUffer 2nd block
-    
-    // int blockSize = b_dim*stride;
-    // if(s!= 1)
-    //     checkCudaErrors(cudaMemcpy(topElemBuffer, b_buffer + b_dim*(stride-1) - 1, sizeof(T)*(b_dim+1), cudaMemcpyDeviceToDevice));
-    // else
-    //     checkCudaErrors(cudaMemcpy(topElemBuffer, b_buffer + b_dim*(stride-1) - 1, sizeof(T)*b_dim, cudaMemcpyDeviceToDevice));
-        
-    // // TODO: change things like this to +=
-    // // Also, time this thing on GPU/CPU? Check this.
-    // b_buffer = b_buffer + b_dim*((2*stride)-1);
-    // topElemBuffer += b_dim+1;
-    // for (int i=0; i<s-2; i++)
-    // {
-    //     checkCudaErrors(cudaMemcpy(topElemBuffer + i*b_dim, b_buffer + i*blockSize, sizeof(T)*b_dim, cudaMemcpyDeviceToDevice));
-    // }
-
-    // if(s >= 2)
-    //     checkCudaErrors(cudaMemcpy(topElemBuffer + (s-2)*b_dim, b_buffer + (s-2)*blockSize, sizeof(T)*(b_dim-1), cudaMemcpyDeviceToDevice));    
-    // b_buffer = b_buffer - b_dim*((2*stride)-1);
-    // topElemBuffer -= b_dim+1;
-    // checkCudaErrors(cudaMemset(topElemBuffer, 0, sizeof(T)));
-
-    // b_buffer = b_buffer + 1;
-    // // TODO: combine this expr with the prev expr..
-    // checkCudaErrors(cudaMemcpy(bottomElemBuffer, b_buffer, sizeof(T)*(b_dim-1), cudaMemcpyDeviceToDevice));
-    // bottomElemBuffer += b_dim-1;
-    // for (int i=0; i<s-1; i++)
-    // {
-    //     checkCudaErrors(cudaMemcpy(bottomElemBuffer + i*b_dim, b_buffer + i*blockSize, sizeof(T)*b_dim, cudaMemcpyDeviceToDevice));
-    // }
-    // bottomElemBuffer -= b_dim-1;
-    // b_buffer = b_buffer - 1;
-    // checkCudaErrors(cudaMemset(bottomElemBuffer + s*b_dim - 1, 0, sizeof(T)));
-
     multiply_kernel<T><<<s, b_dim>>>(rhsUpdateArrayBuffer, topElemBuffer, bottomElemBuffer, b_buffer, bNew_buffer, stride, tile);
-    
+
     back_marshaling_bxb<T><<<gridDim, blockDim, marshaling_share_size>>>(b, b_buffer, stride, b_dim, m);
     back_marshaling_bxb<T><<<gridDim, blockDim, marshaling_share_size>>>(bNew, bNew_buffer, stride, b_dim, m);
     // cudaMemcpy(h_gammaLeft, d_gamma)
@@ -181,7 +169,7 @@ void gtsv_spike_partial_diag_pivot(Datablock<T, T_REAL> *data, const T* dl, cons
     printf("No of 1 by 1 pivotings done = %d.\n", *h_pivotingData);
     printf("Solving done.\n\n");
     // free pivotingData both h and dev
-    // use CheckCudaErrors for all cudaMallocs
+    // use checkCudaErrors for all cudaMallocs
 }
 
 //template<typename T>

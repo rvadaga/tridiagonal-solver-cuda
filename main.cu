@@ -350,7 +350,8 @@ void gtsv_randomMatrix(int m)
     h_x                 = (T_REAL *) malloc(sizeof(T_REAL) * (m+2));
     
     // file is meant to store result at every step
-    FILE *fp1   = fopen("output.txt", "w");
+    FILE *fp1   = fopen("output", "w");
+    FILE *fp2   = fopen("output_1.txt", "w");
 
     // setting refractive index profile, distance and initial source conditions
     for(int i=0; i<m+2; i++)
@@ -441,12 +442,17 @@ void gtsv_randomMatrix(int m)
     cudaGetLastError();
     stop = get_second();
 
+    for(int i=0; i < m; i++)
+        fprintf(fp2, "%4d  %E  %E  %E  %E\n", i, cuAbs(h_x_gpu[i]), cuAbs(h_rhsUpdateArray[i]), cuAbs(h_bNew_back[i]), cuAbs(h_bNew_gpu[i]));   
     // copy back the results to CPU
-    cudaMemcpyAsync(h_x_gpu, b, m*T_size, cudaMemcpyDeviceToHost);
-    cudaMemcpyAsync(h_bNew_gpu, bNew, m*T_size, cudaMemcpyDeviceToHost);
+    checkCudaErrors(cudaMemcpy(h_x_gpu, b, m*T_size, cudaMemcpyDeviceToHost));
+    checkCudaErrors(cudaMemcpy(h_bNew_gpu, bNew, m*T_size, cudaMemcpyDeviceToHost));
+    cudaDeviceSynchronize();
+    for(int i=0; i < m; i++)
+        fprintf(fp1, "%4d  %E  %E  %E  %E\n", i, cuAbs(h_x_gpu[i]), cuAbs(h_rhsUpdateArray[i]), cuAbs(h_bNew_back[i]), cuAbs(h_bNew_gpu[i]));
 
     // for(int i=0; i < m+2; i++)
-    //     fprintf(fp1, "%E\n", cuAbs(h_x_gpu[i]));
+    //  fprintf(fp1, "%E\n", cuAbs(h_x_gpu[i]));
     
     // gammaLeft = cuDiv(h_x_gpu[0], h_x_gpu[1]);
     // gammaRight = cuDiv(h_x_gpu[m-1], h_x_gpu[m]);
@@ -465,6 +471,7 @@ void gtsv_randomMatrix(int m)
     //     const T* d,         // variable vector
     //     const int len       // length of the matrix
     //)
+    
     mv_test_update<T>(h_bNew_back, dx_2InvComplex_1, h_rhsUpdateArray, h_x_gpu, m);
 
     // compares the result from the gpu and the host
@@ -504,6 +511,8 @@ main(int argc, char **argv)
     // get number of SMs on this GPU
     checkCudaErrors(cudaGetDevice(&devID));
     checkCudaErrors(cudaGetDeviceProperties(&deviceProp, devID));
+    // checkCudaErrors(cudaSetDevice(0));
+    // checkCudaErrors(cudaGetDeviceProperties(&deviceProp, 0));
     
     printf("> Device %d: \"%s\"\n", devID, deviceProp.name);
     printf("> SM Capability %d.%d detected.\n", deviceProp.major, deviceProp.minor);
@@ -527,7 +536,7 @@ main(int argc, char **argv)
         }
     }
     else
-        m = 1700;
+        m = 8192;
 
     printf("-------------------------------------------\n");
     printf("Matrix height = %d\n", m);
