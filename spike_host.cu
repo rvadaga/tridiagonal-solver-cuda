@@ -34,10 +34,8 @@ void setConstants(cuDoubleComplex *dx_2InvComplex)
 }
 
 template <typename T, typename T_REAL> 
-void gtsv_spike_partial_diag_pivot(Datablock<T, T_REAL> *data, const T* dl, const T* d, const T* du, T* b, T* bNew, T* rhsUpdateArray, const int m)
+void tridiagonalSolver(Datablock<T, T_REAL> *data, const T* dl, T* d, const T* du, T* b, T* bNew, T* rhsUpdateArray, const int m)
 {
-    printf("\nRunning GTSV SPIKE.\n");
-    
     // prefer larger L1 cache and smaller shared memory
     cudaFuncSetCacheConfig(tiled_diag_pivot_x1<T,T_REAL>,cudaFuncCachePreferL1);
     cudaFuncSetCacheConfig(spike_GPU_back_sub_x1<T>,cudaFuncCachePreferL1);
@@ -80,6 +78,7 @@ void gtsv_spike_partial_diag_pivot(Datablock<T, T_REAL> *data, const T* dl, cons
     int b_dim   = data->b_dim;
     int stride  = data->h_stride;
     int tile    = 128;
+
     int marshaledIndex_1    = data->marshaledIndex_1;
     int marshaledIndex_m_2  = data->marshaledIndex_m_2;
     int marshaledIndex_m_1  = data->marshaledIndex_m_1;
@@ -88,98 +87,106 @@ void gtsv_spike_partial_diag_pivot(Datablock<T, T_REAL> *data, const T* dl, cons
     T *h_x_1    = data->h_x_1;
     T *h_x_m_2  = data->h_x_m_2;
     T *h_x_m_1  = data->h_x_m_1;
+    T *h_diagonal_m_1  = data->h_diagonal_m_1;
+    T *h_diagonal_0  = data->h_diagonal_0;
 
     T* h_gammaLeft      = data->h_gammaLeft;
     T* h_gammaRight     = data->h_gammaRight;
-    // T* dx_2InvComplex   = data->dx_2InvComplex;
-
-    // cudaMalloc((void **)&d_gammaLeft, sizeof(T));
-    // cudaMalloc((void **)&d_gammaRight, sizeof(T));
-    // cudaMalloc((void **)&d_dx_2Inv, sizeof(T_REAL));
+    T* dx_2InvComplex   = data->dx_2InvComplex;     // equals -1/(dx*dx)
+    T* dx_2InvComplex_1 = data->dx_2InvComplex_1;   // equals +1/(dx*dx)
 
     // kernels 
     // data layout transformation
-    forward_marshaling_bxb<T><<<gridDim, blockDim, marshaling_share_size>>>(dl_buffer, dl, stride, b_dim, m, cuGet<T>(0));
-    forward_marshaling_bxb<T><<<gridDim, blockDim, marshaling_share_size>>>(d_buffer,  d,  stride, b_dim, m, cuGet<T>(1));
-    forward_marshaling_bxb<T><<<gridDim, blockDim, marshaling_share_size>>>(du_buffer, du, stride, b_dim, m, cuGet<T>(0));
-    forward_marshaling_bxb<T><<<gridDim, blockDim, marshaling_share_size>>>(b_buffer,  b,  stride, b_dim, m, cuGet<T>(0));
-    forward_marshaling_bxb<T><<<gridDim, blockDim, marshaling_share_size>>>(rhsUpdateArrayBuffer,  rhsUpdateArray,  stride, b_dim, m, cuGet<T>(0));
-     
+    if(data->step == 0){
+        forward_marshaling_bxb<T><<<gridDim, blockDim, marshaling_share_size>>>(dl_buffer, dl, stride, b_dim, m, cuGet<T>(0));
+        forward_marshaling_bxb<T><<<gridDim, blockDim, marshaling_share_size>>>(du_buffer, du, stride, b_dim, m, cuGet<T>(0));
+        forward_marshaling_bxb<T><<<gridDim, blockDim, marshaling_share_size>>>(rhsUpdateArrayBuffer,  rhsUpdateArray,  stride, b_dim, m, cuGet<T>(0));
+        forward_marshaling_bxb<T><<<gridDim, blockDim, marshaling_share_size>>>(d_buffer,  d,  stride, b_dim, m, cuGet<T>(1));
+        forward_marshaling_bxb<T><<<gridDim, blockDim, marshaling_share_size>>>(b_buffer,  b,  stride, b_dim, m, cuGet<T>(0));
+    }
+
     // partitioned solver
-    // tiled_diagonal_pivoting<<<s,b_dim>>>(x, w, v, c2_buffer, flag, dl,d,du,b, stride,tile);
-    tiled_diag_pivot_x1<T,T_REAL><<<s, b_dim>>>(b_buffer, w_buffer, v_buffer, c2_buffer, flag, dl_buffer, d_buffer, du_buffer, stride, tile, pivotingData);
+    tiled_diag_pivot_x1<T,T_REAL><<<s, b_dim>>>(b_buffer, w_buffer, v_buffer, c2_buffer, flag, dl_buffer, d_buffer, du_buffer, stride, tile);
     
     // SPIKE solver
     spike_local_reduction_x1<T><<<s, b_dim, local_reduction_share_size>>>(b_buffer, w_buffer, v_buffer, x_level_2, w_level_2, v_level_2, stride);
     spike_GPU_global_solving_x1<<<1, 32, global_share_size>>>(x_level_2, w_level_2, v_level_2, s);
     spike_GPU_local_solving_x1<T><<<s, b_dim, local_solving_share_size>>>(b_buffer, w_buffer, v_buffer, x_level_2, stride);
     spike_GPU_back_sub_x1<T><<<s, b_dim>>>(b_buffer, w_buffer, v_buffer, x_level_2, stride);
-    cudaDeviceSynchronize();
-    checkCudaErrors(cudaGetLastError());
+    // Solution to Ax = B is in b_buffer. It is data marshaled here.
 
-    checkCudaErrors(cudaMemcpy(h_x_0,   b_buffer,                    sizeof(T), cudaMemcpyDeviceToHost));
-    checkCudaErrors(cudaMemcpy(h_x_1,   b_buffer+marshaledIndex_1,   sizeof(T), cudaMemcpyDeviceToHost));
-    checkCudaErrors(cudaMemcpy(h_x_m_2, b_buffer+marshaledIndex_m_2, sizeof(T), cudaMemcpyDeviceToHost));
-    checkCudaErrors(cudaMemcpy(h_x_m_1, b_buffer+marshaledIndex_m_1, sizeof(T), cudaMemcpyDeviceToHost));
-    printf("h_x_0   = %E.\n", cuAbs(*h_x_0));
-    printf("h_x_1   = %E.\n", cuAbs(*h_x_1));
-    printf("h_x_m_2 = %E.\n", cuAbs(*h_x_m_2));
-    printf("h_x_m_1 = %E.\n", cuAbs(*h_x_m_1));
-    *h_gammaLeft     = cuDiv(*h_x_0, *h_x_1);
-    *h_gammaRight    = cuDiv(*h_x_m_1, *h_x_m_2);
-    // *h_x_1     = cuFma()
+    // checkCudaErrors(cudaMemcpy(h_x_0,   b_buffer,                    sizeof(T), cudaMemcpyDeviceToHost));
+    // checkCudaErrors(cudaMemcpy(h_x_1,   b_buffer+marshaledIndex_1,   sizeof(T), cudaMemcpyDeviceToHost));
+    // checkCudaErrors(cudaMemcpy(h_x_m_2, b_buffer+marshaledIndex_m_2, sizeof(T), cudaMemcpyDeviceToHost));
+    // checkCudaErrors(cudaMemcpy(h_x_m_1, b_buffer+marshaledIndex_m_1, sizeof(T), cudaMemcpyDeviceToHost));
+    // printf("h_x_0   = %E.\n", cuAbs(*h_x_0));
+    // printf("h_x_1   = %E.\n", cuAbs(*h_x_1));
+    // printf("h_x_m_2 = %E.\n", cuAbs(*h_x_m_2));
+    // printf("h_x_m_1 = %E.\n", cuAbs(*h_x_m_1));
+    // *h_gammaLeft     = cuDiv(*h_x_0, *h_x_1);
+    // *h_gammaRight    = cuDiv(*h_x_m_1, *h_x_m_2);
+    *h_gammaLeft     = cuGet<T>((T_REAL)0.0, (T_REAL)0.0);
+    *h_gammaRight    = cuGet<T>((T_REAL)0.0, (T_REAL)0.0);
+    *h_diagonal_0    = cuFma(*h_gammaLeft, *dx_2InvComplex_1, *(data->constRhsTop));
+    *h_diagonal_m_1  = cuFma(*h_gammaRight, *dx_2InvComplex_1, *(data->constRhsBot));
 
-    // int blockSize = b_dim*stride;
-    // checkCudaErrors(cudaMemcpy((topElemBuffer+1), b_buffer + b_dim*(stride-1), sizeof(T)*b_dim, cudaMemcpyDeviceToDevice));
-    // checkCudaErrors(cudaMemcpy(topElemBuffer + b_dim + 1, b_buffer + b_dim*((2*stride) - 1), sizeof(T)*b_dim, cudaMemcpyDeviceToDevice));
-    // checkCudaErrors(cudaMemset((void *)topElemBuffer, 0, sizeof(T)));
-    // checkCudaErrors(cudaMemcpy(bottomElemBuffer, b_buffer, sizeof(T)*b_dim, cudaMemcpyDeviceToDevice));
-    // checkCudaErrors(cudaMemcpy(bottomElemBuffer + b_dim, b_buffer + blockSize, sizeof(T)*b_dim, cudaMemcpyDeviceToDevice));
-    // checkCudaErrors(cudaMemset(bottomElemBuffer + s*b_dim, 0, sizeof(T)));
-    // cudaDeviceSynchronize();
-    // checkCudaErrors(cudaGetLastError());
-    
+    checkCudaErrors(cudaMemcpy(rhsUpdateArrayBuffer, h_diagonal_0, sizeof(T), cudaMemcpyHostToDevice));
+    checkCudaErrors(cudaMemcpy(rhsUpdateArrayBuffer+marshaledIndex_m_1, h_diagonal_m_1, sizeof(T), cudaMemcpyHostToDevice));
+
+    // TODO: time this thing on GPU/CPU? Check this.
     int blockSize = b_dim*stride;
     b_buffer += b_dim*(stride-1);
     topElemBuffer += 1;
-    // TODO: change things like this to +=
-    // Also, time this thing on GPU/CPU? Check this.
     for (int i=0; i<s; i++)
-    {
         checkCudaErrors(cudaMemcpy(topElemBuffer + i*b_dim, b_buffer + i*blockSize, sizeof(T)*b_dim, cudaMemcpyDeviceToDevice));
-    }
+
     b_buffer -= b_dim*(stride-1);
     topElemBuffer -= 1;
     checkCudaErrors(cudaMemset(topElemBuffer, 0, sizeof(T)));
 
     for (int i=0; i<s; i++)
-    {
         checkCudaErrors(cudaMemcpy(bottomElemBuffer + i*b_dim, b_buffer + i*blockSize, sizeof(T)*b_dim, cudaMemcpyDeviceToDevice));
-    }
+
     bottomElemBuffer += 1;
     checkCudaErrors(cudaMemset(bottomElemBuffer + s*b_dim - 1, 0, sizeof(T)));
 
+    // finds new RHS with rhsUpdateArrayBuffer having its 1st and last elements modified
     multiply_kernel<T><<<s, b_dim>>>(rhsUpdateArrayBuffer, topElemBuffer, bottomElemBuffer, b_buffer, bNew_buffer, stride, tile);
 
+    // do back data marshaling only in the last step
+    if(data->step == data->totalSteps-1){
     back_marshaling_bxb<T><<<gridDim, blockDim, marshaling_share_size>>>(b, b_buffer, stride, b_dim, m);
     back_marshaling_bxb<T><<<gridDim, blockDim, marshaling_share_size>>>(bNew, bNew_buffer, stride, b_dim, m);
-    // cudaMemcpy(h_gammaLeft, d_gamma)
+    }
     
-    cudaMemcpy(h_pivotingData, pivotingData, sizeof(int), cudaMemcpyDeviceToHost);
-    printf("No of 1 by 1 pivotings done = %d.\n", *h_pivotingData);
-    printf("Solving done.\n\n");
+    // updating A in Ax=B. This will be used again in the next step for solving. 
+    else{
+    checkCudaErrors(cudaMemcpy(b_buffer, bNew_buffer, sizeof(T)*data->mPad, cudaMemcpyDeviceToDevice));
+    
+    // modifying main diagonal
+    *h_diagonal_0    = cuFma(*h_gammaLeft, *dx_2InvComplex, *(data->constLhsTop));
+    *h_diagonal_m_1  = cuFma(*h_gammaRight, *dx_2InvComplex, *(data->constLhsBot));
+    
+    checkCudaErrors(cudaMemcpy(d_buffer, h_diagonal_0, sizeof(T), cudaMemcpyHostToDevice));
+    checkCudaErrors(cudaMemcpy(d_buffer+marshaledIndex_m_1, h_diagonal_m_1, sizeof(T), cudaMemcpyHostToDevice));
+    }
+
+    // cudaMemcpy(h_gammaLeft, d_gamma)
+    // cudaMemcpy(h_pivotingData, pivotingData, sizeof(int), cudaMemcpyDeviceToHost);
+    // printf("No of 1 by 1 pivotings done = %d.\n", *h_pivotingData);
+    // printf("Solving done.\n\n");
     // free pivotingData both h and dev
     // use checkCudaErrors for all cudaMallocs
 }
 
-//template<typename T>
-//void setConstants(T *dx_2InvComplex);
-//template void setConstants<cuComplex>(cuComplex *);
-//template 
-//void setConstants<cuDoubleComplex>(cuDoubleComplex *);
+// template<typename T>
+// void set_constants(T *dx_2InvComplex);
+// template void set_constants<cuComplex>(cuComplex *);
+// template 
+// void set_constants<cuDoubleComplex>(cuDoubleComplex *);
 
 template <typename T, typename T_REAL> 
-void gtsv_spike_partial_diag_pivot(const T* dl, const T* d, const T* du, T* b, T *bNew, T *rhsUpdateArray, const int m);
+void tridiagonalSolver(const T* dl, T* d, const T* du, T* b, T *bNew, T *rhsUpdateArray, const int m);
 /* explicit instanciation */
-template void gtsv_spike_partial_diag_pivot<cuComplex, float>(Datablock<cuComplex, float> *data, const cuComplex* dl, const cuComplex* d, const cuComplex* du, cuComplex* b, cuComplex *bNew, cuComplex *rhsUpdateArray, const int m);
-template void gtsv_spike_partial_diag_pivot<cuDoubleComplex, double>(Datablock<cuDoubleComplex, double> *data, const cuDoubleComplex* dl, const cuDoubleComplex* d, const cuDoubleComplex* du, cuDoubleComplex* b, cuDoubleComplex *bNew, cuDoubleComplex *rhsUpdateArray, const int m);
+template void tridiagonalSolver<cuComplex, float>(Datablock<cuComplex, float> *data, const cuComplex* dl, cuComplex* d, const cuComplex* du, cuComplex* b, cuComplex *bNew, cuComplex *rhsUpdateArray, const int m);
+template void tridiagonalSolver<cuDoubleComplex, double>(Datablock<cuDoubleComplex, double> *data, const cuDoubleComplex* dl, cuDoubleComplex* d, const cuDoubleComplex* du, cuDoubleComplex* b, cuDoubleComplex *bNew, cuDoubleComplex *rhsUpdateArray, const int m);

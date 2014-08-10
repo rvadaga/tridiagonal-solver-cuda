@@ -35,19 +35,28 @@ class Datablock
     T* bottomElemBuffer;        // stores all the elements required by each thread within a
                                 // thread block to compute its bottom element of upd. RHS
 
+    T* constLhsTop;
+    T* constLhsBot;
+    T* constRhsTop;
+    T* constRhsBot;
     T* x_level_2;
     T* w_level_2;
     T* v_level_2;
-
+    int step;
+    int totalSteps;
+    int mPad;
     T *h_gammaLeft;
     T *h_gammaRight;
-    T *dx_2InvComplex;
+    T *dx_2InvComplex;  // -1/(dx*dx)
+    T *dx_2InvComplex_1;// 1/(dx*dx)
 
     T *h_x_0;       // 0th element of x in Ax = B 
     T *h_x_1;       // 1st element of x in Ax = B 
     T *h_x_m_2;     // (m-2) element of x in Ax = B
     T *h_x_m_1;     // (m-1) element of x in Ax = B
-    Datablock(int m_pad, int s, T dx_2InvCmplx, int l_stride)
+    T *h_diagonal_0;       // 0 th element of main diagonal in Ax = B
+    T *h_diagonal_m_1;     // (m-1) element of main diagonal in Ax = B
+    Datablock(int m_pad, int s, int steps, T dx_2InvCmplx, int l_stride)
     {
         T_size = sizeof(T);
 
@@ -65,37 +74,71 @@ class Datablock
         checkCudaErrors(cudaMalloc((void **)&bottomElemBuffer, T_size*(l_stride+1)*s)); 
         checkCudaErrors(cudaMalloc((void **)&topElemBuffer, T_size*(l_stride+1)*s)); 
         
+        checkCudaErrors(cudaMallocHost((void **) &constLhsBot, T_size));
+        checkCudaErrors(cudaMallocHost((void **) &constLhsTop, T_size));
+        checkCudaErrors(cudaMallocHost((void **) &constRhsBot, T_size));
+        checkCudaErrors(cudaMallocHost((void **) &constRhsTop, T_size));
+        // checkCudaErrors(cudaMalloc((void **)&constLhsBot, T_size));
+        // checkCudaErrors(cudaMalloc((void **)&constRhsBot, T_size));
+        // checkCudaErrors(cudaMalloc((void **)&constLhsTop, T_size));
+        // checkCudaErrors(cudaMalloc((void **)&constRhsTop, T_size));
         checkCudaErrors(cudaMalloc((void **)&x_level_2, T_size*s*2)); 
         checkCudaErrors(cudaMalloc((void **)&w_level_2, T_size*s*2)); 
         checkCudaErrors(cudaMalloc((void **)&v_level_2, T_size*s*2));
 
-        h_x_0   = (T *)malloc(T_size);
-        h_x_1   = (T *)malloc(T_size);
-        h_x_m_2 = (T *)malloc(T_size); 
-        h_x_m_1 = (T *)malloc(T_size); 
+        // h_x_0   = (T *)malloc(T_size);
+        // h_x_1   = (T *)malloc(T_size);
+        // h_x_m_2 = (T *)malloc(T_size); 
+        // h_x_m_1 = (T *)malloc(T_size); 
+        // h_diagonal_0 = (T *)malloc(T_size); 
+        // h_diagonal_m_1 = (T *)malloc(T_size); 
         
-        h_gammaLeft = (T *)malloc(T_size); 
-        h_gammaRight = (T *)malloc(T_size); 
-        dx_2InvComplex = (T *)malloc(T_size); 
-        *dx_2InvComplex = dx_2InvCmplx;
+        // h_gammaLeft = (T *)malloc(T_size); 
+        // h_gammaRight = (T *)malloc(T_size); 
+        // dx_2InvComplex = (T *)malloc(T_size); 
+        // dx_2InvComplex_1 = (T *)malloc(T_size); 
+        checkCudaErrors(cudaMallocHost((void **)&h_x_0, T_size));
+        checkCudaErrors(cudaMallocHost((void **)&h_x_1, T_size));
+        checkCudaErrors(cudaMallocHost((void **)&h_x_m_1, T_size));
+        checkCudaErrors(cudaMallocHost((void **)&h_x_m_2, T_size));
+        checkCudaErrors(cudaMallocHost((void **)&h_diagonal_0, T_size));
+        checkCudaErrors(cudaMallocHost((void **)&h_diagonal_m_1, T_size));
+        checkCudaErrors(cudaMallocHost((void **)&h_gammaRight, T_size));
+        checkCudaErrors(cudaMallocHost((void **)&h_gammaLeft, T_size));
+        checkCudaErrors(cudaMallocHost((void **)&dx_2InvComplex, T_size));
+        checkCudaErrors(cudaMallocHost((void **)&dx_2InvComplex_1, T_size));
+
+        *dx_2InvComplex   = dx_2InvCmplx;
+        *dx_2InvComplex_1 = cuNeg(dx_2InvCmplx);
+        totalSteps = steps;
+        mPad = m_pad;
     }
 
     // Destructor which frees all the array pointers allocated
     ~Datablock()
     {
         // free memory
-        cudaFree(flag);
-        cudaFree(dl_buffer);
-        cudaFree(d_buffer);
-        cudaFree(du_buffer);
-        cudaFree(b_buffer);
-        cudaFree(w_buffer);
-        cudaFree(v_buffer);
-        cudaFree(c2_buffer);
-        cudaFree(x_level_2);
-        cudaFree(w_level_2);
-        cudaFree(v_level_2);    
-        // TODO: check whether all have been freed or not   
+        checkCudaErrors(cudaFree(flag));
+        checkCudaErrors(cudaFree(dl_buffer));
+        checkCudaErrors(cudaFree(d_buffer));
+        checkCudaErrors(cudaFree(du_buffer));
+        checkCudaErrors(cudaFree(b_buffer));
+        checkCudaErrors(cudaFree(w_buffer));
+        checkCudaErrors(cudaFree(v_buffer));
+        checkCudaErrors(cudaFree(c2_buffer));
+        checkCudaErrors(cudaFree(bNew_buffer));
+        checkCudaErrors(cudaFree(rhsUpdateArrayBuffer));
+        checkCudaErrors(cudaFree(bottomElemBuffer));
+        checkCudaErrors(cudaFree(topElemBuffer));
+        checkCudaErrors(cudaFree(x_level_2));
+        checkCudaErrors(cudaFree(w_level_2));
+        checkCudaErrors(cudaFree(v_level_2));
+        // checkCudaErrors(cudaFree(constLhsTop));
+        // checkCudaErrors(cudaFree(constLhsBot));
+        // checkCudaErrors(cudaFree(constRhsTop));
+        // checkCudaErrors(cudaFree(constRhsBot));
+        // TODO: check whether all have been freed or not
+        checkCudaErrors(cudaDeviceReset()); 
     }
     void setLaunchParameters(dim3 gridData, dim3 blockData, int a, int b, int tile_marshal, int stride)
     {

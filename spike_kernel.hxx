@@ -183,8 +183,7 @@ __global__ void tiled_diag_pivot_x1(
                                       const bElem* b,      // main diagonal (d_buffer)
                                       const bElem* c,      // upper diagonal (du_buffer)
                                       const int stride,     // h_stride (stride)
-                                      const int tile,       // tile
-                                      int* pivotingData
+                                      const int tile       // tile
                                       )                                    
 {
     
@@ -783,7 +782,6 @@ const int stride
     int tx;
     int b_dim;
     int bx;
-
     
     tx      = threadIdx.x;
     b_dim   = blockDim.x;
