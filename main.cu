@@ -299,9 +299,9 @@ void gtsv_randomMatrix(int m, int steps)
     T       *rhsUpdateArray; // to store array which is to be multipled to get B new
 
     // constants
-    printf("-------------------------------------------\n");
-    printf("steps = %d\n", steps);    
-    printf("-------------------------------------------\n");
+    // printf("-------------------------------------------\n");
+    // printf("steps = %d\n", steps);    
+    // printf("-------------------------------------------\n");
     T_REAL halfWidth= 2;
     T_REAL simDomain= 40;
     T_REAL dx       = simDomain/(m+2);
@@ -486,7 +486,7 @@ void gtsv_randomMatrix(int m, int steps)
     for(int i=0; i < m; i++)
         fprintf(fp1, "%E\n", cuAbs(h_x_gpu[i]));
     
-    printf("time = %.6f s\n\n", stop-start);
+    printf("time = %.6f s\n", stop-start);
 
     checkCudaErrors(cudaFreeHost(h_d));
     checkCudaErrors(cudaFreeHost(h_b));
@@ -524,18 +524,19 @@ main(int argc, char **argv)
         return 0;
     }
 
-    printf("\n-------------------------------------------\n");
+    // printf("\n-------------------------------------------\n");
     int m, steps, type, devID = findCudaDevice(argc, (const char **)argv);
     cudaDeviceProp deviceProp;
+    // Uncomment line 1011 in helper_cuda
 
     // get number of SMs on this GPU
     checkCudaErrors(cudaGetDevice(&devID));
     checkCudaErrors(cudaGetDeviceProperties(&deviceProp, devID));
     // checkCudaErrors(cudaSetDevice(0));
     // checkCudaErrors(cudaGetDeviceProperties(&deviceProp, 0));
-    
-    printf("> Device %d: \"%s\"\n", devID, deviceProp.name);
-    printf("> SM Capability %d.%d detected.\n", deviceProp.major, deviceProp.minor);
+
+    // printf("> Device %d: \"%s\"\n", devID, deviceProp.name);
+    // printf("> SM Capability %d.%d detected.\n", deviceProp.major, deviceProp.minor);
     
     if (checkCmdLineFlag(argc, (const char **)argv, "size"))
     {
@@ -569,7 +570,7 @@ main(int argc, char **argv)
         }
     }
     else
-        steps = 10;
+        steps = 1;
 
     if (checkCmdLineFlag(argc, (const char **)argv, "type"))
     {
@@ -584,20 +585,20 @@ main(int argc, char **argv)
     else
         type = 1;
 
-    printf("-------------------------------------------\n");
-    printf("Matrix height = %d\n", m);
-    printf("-------------------------------------------\n");
+    // printf("-------------------------------------------\n");
+    // printf("Matrix height = %d\n", m);
+    // printf("-------------------------------------------\n");
     if(type == 1){
-        printf("GTSV solving using cuComplex ...\n");
+        // printf("GTSV solving using cuComplex ...\n");
         gtsv_randomMatrix<cuComplex, float>(m, steps);
-        printf("Finished GTSV solving using cuComplex\n");
+        // printf("Finished GTSV solving using cuComplex\n");
     }
     if(type == 2){
-        printf("GTSV solving using cuDoubleComplex ...\n");
+        // printf("GTSV solving using cuDoubleComplex ...\n");
         gtsv_randomMatrix<cuDoubleComplex, double>(m, steps);
-        printf("Finished GTSV solving using cuDoubleComplex\n");
+        // printf("Finished GTSV solving using cuDoubleComplex\n");
     }
-    printf("-------------------------------------------\n");
+    // printf("-------------------------------------------\n");
 
     return 0;
 }
