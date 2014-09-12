@@ -42,12 +42,12 @@ void tridiagonalSolver(Datablock<T, T_REAL> *data, const T* dl, T* d, const T* d
     cudaFuncSetCacheConfig(multiply_kernel<T>,cudaFuncCachePreferL1);
     
     // variables for finding no of 1 by 1 pivotings
-    int *h_pivotingData;
-    int *pivotingData;
+    // int *h_pivotingData;
+    // int *pivotingData;
 
-    h_pivotingData = (int *)malloc(sizeof(int));
-    checkCudaErrors(cudaMalloc((void **)&pivotingData, sizeof(int)));
-    checkCudaErrors(cudaMemset((void *)pivotingData, 0, sizeof(int)));
+    // h_pivotingData = (int *)malloc(sizeof(int));
+    // checkCudaErrors(cudaMalloc((void **)&pivotingData, sizeof(int)));
+    // checkCudaErrors(cudaMemset((void *)pivotingData, 0, sizeof(int)));
 
     T* dl_buffer    = data->dl_buffer;    // lower digonal after DM
     T* d_buffer     = data->d_buffer;     // diagonal after DM
@@ -79,14 +79,14 @@ void tridiagonalSolver(Datablock<T, T_REAL> *data, const T* dl, T* d, const T* d
     int stride  = data->h_stride;
     int tile    = 128;
 
-    int marshaledIndex_1    = data->marshaledIndex_1;
-    int marshaledIndex_m_2  = data->marshaledIndex_m_2;
+    // int marshaledIndex_1    = data->marshaledIndex_1;
+    // int marshaledIndex_m_2  = data->marshaledIndex_m_2;
     int marshaledIndex_m_1  = data->marshaledIndex_m_1;
     
-    T *h_x_0    = data->h_x_0;
-    T *h_x_1    = data->h_x_1;
-    T *h_x_m_2  = data->h_x_m_2;
-    T *h_x_m_1  = data->h_x_m_1;
+    // T *h_x_0    = data->h_x_0;
+    // T *h_x_1    = data->h_x_1;
+    // T *h_x_m_2  = data->h_x_m_2;
+    // T *h_x_m_1  = data->h_x_m_1;
     T *h_diagonal_m_1  = data->h_diagonal_m_1;
     T *h_diagonal_0  = data->h_diagonal_0;
 
@@ -154,9 +154,10 @@ void tridiagonalSolver(Datablock<T, T_REAL> *data, const T* dl, T* d, const T* d
     multiply_kernel<T><<<s, b_dim>>>(rhsUpdateArrayBuffer, topElemBuffer, bottomElemBuffer, b_buffer, bNew_buffer, stride, tile);
 
     // do back data marshaling only in the last step
-    if(data->step == data->totalSteps-1){
+    if(data->step == (data->totalSteps)-1){
     back_marshaling_bxb<T><<<gridDim, blockDim, marshaling_share_size>>>(b, b_buffer, stride, b_dim, m);
     back_marshaling_bxb<T><<<gridDim, blockDim, marshaling_share_size>>>(bNew, bNew_buffer, stride, b_dim, m);
+    // may not be reqd.! check!!!
     }
     
     // updating A in Ax=B. This will be used again in the next step for solving. 
@@ -177,6 +178,55 @@ void tridiagonalSolver(Datablock<T, T_REAL> *data, const T* dl, T* d, const T* d
     // printf("Solving done.\n\n");
     // free pivotingData both h and dev
     // use checkCudaErrors for all cudaMallocs
+    // TODO: check if 2*2 diagonal pivoting is going on... else remove that part...
+}
+
+template <typename T, typename T_REAL> 
+void tridiagonalSolverHost(Datablock<T, T_REAL> *data, const T* dl, T* d, const T* du, T* b, T* bNew, T* rhsUpdateArray, T* x, const int m)
+{
+    T* h_gammaLeft      = data->h_gammaLeft;
+    T* h_gammaRight     = data->h_gammaRight;
+    T* dx_2InvComplex   = data->dx_2InvComplex;     // equals -1/(dx*dx)
+    T* dx_2InvComplex_1 = data->dx_2InvComplex_1;   // equals +1/(dx*dx)
+    T *gamma = data->gamma;
+    T *h_diagonal_m_1  = data->h_diagonal_m_1;
+    T *h_diagonal_0  = data->h_diagonal_0;
+    T  beta = d[0];
+    x[0] = cuDiv(b[0], beta);
+    int i;
+    for (i=1; i<m; i++){
+        gamma[i] = cuDiv(du[i-1], beta);
+        beta = cuFma(cuNeg(gamma[i]), dl[i], d[i]);
+        x[i] = cuFma(cuNeg(x[i-1]), dl[i], b[i]);
+        x[i] = cuDiv(x[i], beta);
+    }
+    int k;
+    for (i=1; i<m; i++){
+        k = m-i;
+        x[k-1] = cuFma(cuNeg(x[k]), gamma[k], x[k-1]);
+    }
+
+    *h_gammaLeft     = cuGet<T>((T_REAL)0.0, (T_REAL)0.0);
+    *h_gammaRight    = cuGet<T>((T_REAL)0.0, (T_REAL)0.0);
+    *h_diagonal_0    = cuFma(*h_gammaLeft, *dx_2InvComplex_1, *(data->constRhsTop));
+    *h_diagonal_m_1  = cuFma(*h_gammaRight, *dx_2InvComplex_1, *(data->constRhsBot));
+    rhsUpdateArray[0] = *h_diagonal_0;
+    rhsUpdateArray[m-1] = *h_diagonal_m_1;
+
+    bNew[0] = cuAdd(cuMul(rhsUpdateArray[0], x[0]), cuMul(*dx_2InvComplex_1, x[1]));
+    bNew[m-1] = cuAdd(cuMul(*dx_2InvComplex_1, x[m-2]), cuMul(rhsUpdateArray[m-1], x[m-1]));
+    for (i=1; i<m-1; i++){
+        // bNew[i] = dx_2InvComplex_1*x[i-1] + rhsUpdateArray[i]*x[i] + dx_2InvComplex_1*x[i+1];
+        bNew[i] = cuMul(*dx_2InvComplex_1, x[i-1]);
+        bNew[i] = cuFma(rhsUpdateArray[i], x[i], bNew[i]);
+        bNew[i] = cuFma(*dx_2InvComplex_1, x[i+1], bNew[i]);
+    }
+
+    if (data->step != (data->totalSteps-1)){
+        d[0] = cuFma(*h_gammaLeft, *dx_2InvComplex, *(data->constLhsTop));
+        d[m-1] = cuFma(*h_gammaLeft, *dx_2InvComplex, *(data->constLhsBot));
+        memcpy(b, bNew, sizeof(T)*m);
+    }
 }
 
 // template<typename T>
@@ -186,7 +236,14 @@ void tridiagonalSolver(Datablock<T, T_REAL> *data, const T* dl, T* d, const T* d
 // void set_constants<cuDoubleComplex>(cuDoubleComplex *);
 
 template <typename T, typename T_REAL> 
-void tridiagonalSolver(const T* dl, T* d, const T* du, T* b, T *bNew, T *rhsUpdateArray, const int m);
+void tridiagonalSolver(Datablock<T, T_REAL> *data, const T* dl, T* d, const T* du, T* b, T *bNew, T *rhsUpdateArray, const int m);
 /* explicit instanciation */
 template void tridiagonalSolver<cuComplex, float>(Datablock<cuComplex, float> *data, const cuComplex* dl, cuComplex* d, const cuComplex* du, cuComplex* b, cuComplex *bNew, cuComplex *rhsUpdateArray, const int m);
 template void tridiagonalSolver<cuDoubleComplex, double>(Datablock<cuDoubleComplex, double> *data, const cuDoubleComplex* dl, cuDoubleComplex* d, const cuDoubleComplex* du, cuDoubleComplex* b, cuDoubleComplex *bNew, cuDoubleComplex *rhsUpdateArray, const int m);
+
+
+template <typename T, typename T_REAL> 
+void tridiagonalSolverHost(Datablock<T, T_REAL> *data, const T* dl, T* d, const T* du, T* b, T *bNew, T *rhsUpdateArray, T* x, const int m);
+// explicit instanciation
+template void tridiagonalSolverHost<cuComplex, float>(Datablock<cuComplex, float> *data, const cuComplex* dl, cuComplex* d, const cuComplex* du, cuComplex* b, cuComplex *bNew, cuComplex *rhsUpdateArray, cuComplex *x, const int m);
+template void tridiagonalSolverHost<cuDoubleComplex, double>(Datablock<cuDoubleComplex, double> *data, const cuDoubleComplex* dl, cuDoubleComplex* d, const cuDoubleComplex* du, cuDoubleComplex* b, cuDoubleComplex *bNew, cuDoubleComplex *rhsUpdateArray, cuDoubleComplex *x, const int m);

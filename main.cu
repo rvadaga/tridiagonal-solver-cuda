@@ -39,7 +39,7 @@ OR THE USE OR OTHER DEALINGS WITH THE SOFTWARE.
 #include <assert.h>
 
 #define DEBUG 0
-#define PI 3.141592654
+#define PI 3.141592653589793
 static double get_second (void)
 {
     struct timeval tv;
@@ -141,6 +141,10 @@ void findBestGrid(int m, int tile_marshal, int *p_m_pad, int *p_b_dim, int *p_s,
 template <typename T, typename T_REAL> 
 void tridiagonalSolver(Datablock<T, T_REAL> *data, const T* dl, T* d, const T* du, T* b, T* bNew, T *rhsUpdateArray, const int m);
 
+template <typename T, typename T_REAL> 
+void tridiagonalSolverHost(Datablock<T, T_REAL> *data, const T* dl, T* d, const T* du, T* b, T *bNew, T *rhsUpdateArray, T* x, const int m);
+
+
 //template<typename T>
 void setConstants(cuDoubleComplex *dx_2InvComplex);
 
@@ -176,7 +180,7 @@ void mv_test
     }
         
     // multiplication of last row m
-    x[m-1]= cuAdd( cuMul(a[m-1],d[m-2]) , cuMul(b[m-1],d[m-1]) );
+    x[m-1]= cuAdd(cuMul(a[m-1],d[m-2]) , cuMul(b[m-1],d[m-1]) );
     printf("Multiplication done.\n\n");
 }
 
@@ -271,7 +275,7 @@ void compare_result
     printf("Comparing done.\n\n");
 }
 
-//This is a testing gtsv function
+// This is a testing gtsv function
 template <typename T, typename T_REAL> 
 void gtsv_randomMatrix(int m, int steps)
 {
@@ -280,7 +284,9 @@ void gtsv_randomMatrix(int m, int steps)
     T *h_d;             // diagonal elements of mat A (n elements)
     T *h_du;            // set of upper diagonal elements of mat A (n-1 elements)
     T *h_b;             // RHS array has n elements
+    T *h_field;         // field array to store x in cpu computation
     T *h_rhsUpdateArray;// array to be multiplied for RHS update
+    T *h_bNew;          // bNew after n steps on CPU
     
     T *h_x_gpu;     // results from GPU
     T *h_bNew_gpu;  // copies updated RHS from GPU
@@ -306,7 +312,7 @@ void gtsv_randomMatrix(int m, int steps)
     T_REAL simDomain= 40;
     T_REAL dx       = simDomain/(m+2);
     T_REAL dx_2Inv  = 1/(dx*dx);
-    T_REAL dz       = 0.5;
+    T_REAL dz       = 0.55;
     T_REAL dzInv    = 1/dz;
     T_REAL nCore    = 1.5;
     T_REAL nClad    = 1.48;
@@ -334,7 +340,7 @@ void gtsv_randomMatrix(int m, int steps)
     // int local_solving_share_size     = (2*b_dim*2+2*b_dim+2)*T_size;
     // int marshaling_share_size        = tile_marshal*(tile_marshal+1)*T_size;
     
-    Datablock<T, T_REAL> data(m_pad, s, steps, dx_2InvComplex, b_dim);
+    Datablock<T, T_REAL> data(m, m_pad, s, steps, dx_2InvComplex, b_dim);
     dim3 gridDim(b_dim/tile_marshal, s);        // g_data
     dim3 blockDim(tile_marshal, tile_marshal);  // b_data
     data.setLaunchParameters(gridDim, blockDim, s, b_dim, tile_marshal, stride);
@@ -346,13 +352,14 @@ void gtsv_randomMatrix(int m, int steps)
     checkCudaErrors(cudaMallocHost((void **) &h_x, sizeof(T_REAL) * (m+2)));
     checkCudaErrors(cudaMallocHost((void **) &h_dl, T_size * m));
     checkCudaErrors(cudaMallocHost((void **) &h_du, T_size * m));
+    checkCudaErrors(cudaMallocHost((void **) &h_field, T_size * m));
     checkCudaErrors(cudaMallocHost((void **) &h_Ex, T_size * (m+2)));
     checkCudaErrors(cudaMallocHost((void **) &h_x_gpu, T_size * m));
     checkCudaErrors(cudaMallocHost((void **) &h_b_back, T_size * m));
+    checkCudaErrors(cudaMallocHost((void **) &h_bNew, T_size * m));
     checkCudaErrors(cudaMallocHost((void **) &h_bNew_gpu, T_size * m));
     checkCudaErrors(cudaMallocHost((void **) &h_bNew_back, T_size * m));
     checkCudaErrors(cudaMallocHost((void **) &h_rhsUpdateArray, T_size * m));
-    
     // file is meant to store result at every step
     FILE *fp1   = fopen("output", "w");
 
@@ -380,6 +387,7 @@ void gtsv_randomMatrix(int m, int steps)
     checkCudaErrors(cudaMemset(d,  0, m * T_size));
     checkCudaErrors(cudaMemset(dl, 0, m * T_size));
     checkCudaErrors(cudaMemset(du, 0, m * T_size));
+    checkCudaErrors(cudaMemset(b,  0, m * T_size));
     
     // T gammaLeft     = cuDiv(h_Ex[1], h_Ex[2]);
     // T gammaRight    = cuDiv(h_Ex[m], h_Ex[m-1]);
@@ -393,7 +401,6 @@ void gtsv_randomMatrix(int m, int steps)
     // checkCudaErrors(cudaMemcpy(data.constLhsTop, &constLhsTop, T_size, cudaMemcpyHostToDevice));
     // checkCudaErrors(cudaMemcpy(data.constRhsBot, &constRhsBot, T_size, cudaMemcpyHostToDevice));
     // checkCudaErrors(cudaMemcpy(data.constRhsTop, &constRhsTop, T_size, cudaMemcpyHostToDevice));
-    
     *(data.constLhsTop) = constLhsTop;
     *(data.constLhsBot) = constLhsBot;
     *(data.constRhsTop) = constRhsTop;
@@ -403,13 +410,13 @@ void gtsv_randomMatrix(int m, int steps)
     // first element in sub-diagonal is equal to 0 
     h_dl[0]   = cuGet<T>((T_REAL)0.0, (T_REAL)0.0); 
     h_d[0]    = cuFma(dx_2InvComplex, gammaLeft, constLhsTop);
-    h_rhsUpdateArray[0]    = constRhsTop;
+    h_rhsUpdateArray[0] = constRhsTop;
     h_du[0]   = dx_2InvComplex;
 
     // setting last elements
     h_dl[m-1] = dx_2InvComplex;
     h_d[m-1]  = cuFma(dx_2InvComplex, gammaRight, constLhsBot);
-    h_rhsUpdateArray[m-1]    = constRhsBot;
+    h_rhsUpdateArray[m-1] = constRhsBot;
     h_du[m-1] = cuGet<T>((T_REAL)0.0, (T_REAL)0.0);
     // last element in super diagonal is equal to 0
     
@@ -427,10 +434,12 @@ void gtsv_randomMatrix(int m, int steps)
         h_du[k] = dx_2InvComplex;
         h_d[k]  = cuGet<T>(2*dx_2Inv - k0_2*(pow(h_n[k+1], 2) - pow(nRef, 2)), 4*beta*dzInv);
         h_rhsUpdateArray[k]  = cuGet<T>(-2*dx_2Inv + k0_2*(pow(h_n[k+1], 2) - pow(nRef, 2)), 4*beta*dzInv);
-        h_b[k]  = cuGet<T>((-2*dx_2Inv + k0_2*(pow(h_n[k+1], 2) - pow(nRef, 2))) * cuReal(h_Ex[k+1]) - 4*beta*dzInv*cuImag(h_Ex[k+1]) + dx_2Inv * (cuReal(h_Ex[k]) + cuReal(h_Ex[k+2])), (-2*dx_2Inv + k0_2*(pow(h_n[k+1], 2) - pow(nRef, 2))) * cuImag(h_Ex[k+1]) + 4*beta*dzInv * cuReal(h_Ex[k+1]) + dx_2Inv * (cuImag(h_Ex[k]) + cuImag(h_Ex[k+2])));
+        // h_b[k]  = cuGet<T>((-2*dx_2Inv + k0_2*(pow(h_n[k+1], 2) - pow(nRef, 2))) * cuReal(h_Ex[k+1]) - 4*beta*dzInv*cuImag(h_Ex[k+1]) + dx_2Inv * (cuReal(h_Ex[k]) + cuReal(h_Ex[k+2])), (-2*dx_2Inv + k0_2*(pow(h_n[k+1], 2) - pow(nRef, 2))) * cuImag(h_Ex[k+1]) + 4*beta*dzInv * cuReal(h_Ex[k+1]) + dx_2Inv * (cuImag(h_Ex[k]) + cuImag(h_Ex[k+2])));
+        h_b[k]  = cuMul(cuGet<T>(dx_2InvComplex_1), h_Ex[k]);
+        h_b[k]  = cuFma(cuGet<T>(-2*dx_2Inv + k0_2*(pow(h_n[k+1], 2) - pow(nRef, 2)), 4*beta*dzInv), h_Ex[k+1], h_b[k]);
+        h_b[k]  = cuFma(cuGet<T>(dx_2InvComplex_1), h_Ex[k+2], h_b[k]);
     }
     
-
     // copying arrays from host to device
     checkCudaErrors(cudaMemcpy(dl,  h_dl,   m*T_size, cudaMemcpyHostToDevice));
     checkCudaErrors(cudaMemcpy(d,   h_d,    m*T_size, cudaMemcpyHostToDevice));
@@ -462,20 +471,100 @@ void gtsv_randomMatrix(int m, int steps)
         cudaGetLastError();
     }
     stop = get_second();
+    printf("time on gpu = %.6f s\n", stop-start);
 
     // copy back the results to CPU
     cudaDeviceSynchronize();
     checkCudaErrors(cudaGetLastError());
     checkCudaErrors(cudaMemcpy(h_x_gpu, b, m*T_size, cudaMemcpyDeviceToHost));
     checkCudaErrors(cudaMemcpy(h_bNew_gpu, bNew, m*T_size, cudaMemcpyDeviceToHost));
+    /*
+    // a is lower diagonal
+    // b is main diagonal
+    // c is upper diagonal
+    // d is the rhs
+    def c_TDMA_Solver(a, b, c, d):
+    x = zeros(len(d),dtype='complex')
+    gamma = zeros(len(d),dtype='complex')
+    n = len(d)
+    beta = b[0]
+    code = """
+        x(0) = d(0)/beta;
+        int i;
+        for (i=1; i<n; i++){
+            gamma(i) = c(i-1)/beta;
+            beta = b(i)-a(i)*gamma(i);
+            x(i) = (d(i)-a(i)*x(i-1))/beta;
+        }
+        int k;
+        for (i=1; i<n; i++){
+            k = n-i;
+            x(k-1) = x(k-1)-gamma(k)*x(k);
+        }
+        """
+    inline(code, ['a', 'b', 'c', 'd', 'x', 'gamma', 'n', 'beta'], type_converters=blitz, compiler='gcc', verbose=1)
+    return x
+    # end of py code
+    */
+    // # begin of cpu code to be uncommented later
+    // setting first elements
+    // first element in sub-diagonal is equal to 0 
+    h_dl[0]   = cuGet<T>((T_REAL)0.0, (T_REAL)0.0); 
+    h_d[0]    = cuFma(dx_2InvComplex, gammaLeft, constLhsTop);
+    h_rhsUpdateArray[0] = constRhsTop;
+    h_du[0]   = dx_2InvComplex;
 
+    // setting last elements
+    h_dl[m-1] = dx_2InvComplex;
+    h_d[m-1]  = cuFma(dx_2InvComplex, gammaRight, constLhsBot);
+    h_rhsUpdateArray[m-1] = constRhsBot;
+    h_du[m-1] = cuGet<T>((T_REAL)0.0, (T_REAL)0.0);
+    // last element in super diagonal is equal to 0
+    
+    // By following this convention, we can access elements of dl, du, d present in the same row by the row's index.
+
+    h_b[0] = cuMul(cuFma(gammaLeft, dx_2InvComplex, constRhsTop), h_Ex[1]);
+    h_b[0] = cuFma(dx_2InvComplex, h_Ex[2], h_b[0]);
+    h_b[m-1] = cuMul(cuFma(gammaRight, dx_2InvComplex, constRhsTop), h_Ex[m-1]);
+    h_b[m-1] = cuFma(dx_2InvComplex, h_Ex[m-2], h_b[m-1]);
+
+    // setting interior elements
+    for(int k=1; k<m-1; k++)
+    {
+        h_dl[k] = dx_2InvComplex;
+        h_du[k] = dx_2InvComplex;
+        h_d[k]  = cuGet<T>(2*dx_2Inv - k0_2*(pow(h_n[k+1], 2) - pow(nRef, 2)), 4*beta*dzInv);
+        h_rhsUpdateArray[k]  = cuGet<T>(-2*dx_2Inv + k0_2*(pow(h_n[k+1], 2) - pow(nRef, 2)), 4*beta*dzInv);
+        // h_b[k]  = cuGet<T>((-2*dx_2Inv + k0_2*(pow(h_n[k+1], 2) - pow(nRef, 2))) * cuReal(h_Ex[k+1]) - 4*beta*dzInv*cuImag(h_Ex[k+1]) + dx_2Inv * (cuReal(h_Ex[k]) + cuReal(h_Ex[k+2])), (-2*dx_2Inv + k0_2*(pow(h_n[k+1], 2) - pow(nRef, 2))) * cuImag(h_Ex[k+1]) + 4*beta*dzInv * cuReal(h_Ex[k+1]) + dx_2Inv * (cuImag(h_Ex[k]) + cuImag(h_Ex[k+2])));
+        h_b[k]  = cuMul(cuGet<T>(dx_2InvComplex_1), h_Ex[k]);
+        h_b[k]  = cuFma(cuGet<T>(-2*dx_2Inv + k0_2*(pow(h_n[k+1], 2) - pow(nRef, 2)), 4*beta*dzInv), h_Ex[k+1], h_b[k]);
+        h_b[k]  = cuFma(cuGet<T>(dx_2InvComplex_1), h_Ex[k+2], h_b[k]);
+    }
+    for(int k=1; k<m-1; k++)
+    {
+        h_rhsUpdateArray[k]  = cuGet<T>(-2*dx_2Inv + k0_2*(pow(h_n[k+1], 2) - pow(nRef, 2)), 4*beta*dzInv);
+    }
+
+    start = get_second();
+    for(int i=0; i<steps; i++)
+    {
+        data.step = i;
+        tridiagonalSolverHost<T, T_REAL>(&data, h_dl, h_d, h_du, h_b, h_bNew, h_rhsUpdateArray, h_field, m);
+    }
+    stop = get_second();
+    
+    printf("time on cpu = %.6f s\n", stop-start);
+    // # end of cpu code to be uncommented later 
+    compare_result<T, T_REAL>(h_field, h_x_gpu, m, 1e-10, 1e-10, 50, stride);
+    compare_result<T, T_REAL>(h_bNew, h_bNew_gpu, m, 1e-10, 1e-10, 50, stride);
+    
     // Uncomment the next 12 lines only when program is being tested for 1 step.
     // gammaLeft = cuDiv(h_x_gpu[0], h_x_gpu[1]);
     // gammaRight = cuDiv(h_x_gpu[m-1], h_x_gpu[m-2]);
     // h_rhsUpdateArray[0] = cuFma(gammaLeft, cuGet<T>(dx_2InvComplex_1), h_rhsUpdateArray[0]);    
     // h_rhsUpdateArray[m-1] = cuFma(gammaRight, cuGet<T>(dx_2InvComplex_1), h_rhsUpdateArray[m-1]);    
 
-    // // mv_test computes B (h_b_back) in Ax = B where x is the result from the gpu
+    // mv_test computes B (h_b_back) in Ax = B where x is the result from the gpu
     // mv_test<T>(h_b_back, h_dl, h_d, h_du, h_x_gpu, m);
     // mv_test_update<T>(h_bNew_back, cuGet<T>(dx_2InvComplex_1), h_rhsUpdateArray, h_x_gpu, m);
 
@@ -486,7 +575,6 @@ void gtsv_randomMatrix(int m, int steps)
     for(int i=0; i < m; i++)
         fprintf(fp1, "%E\n", cuAbs(h_x_gpu[i]));
     
-    printf("time = %.6f s\n", stop-start);
 
     checkCudaErrors(cudaFreeHost(h_d));
     checkCudaErrors(cudaFreeHost(h_b));

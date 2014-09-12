@@ -3,9 +3,4 @@
 *.o
 
 #ignore output log file
-output_1.txt
 output
-
-2d_TE_final.py
-fd_TBC_2d_TM_2.py
-run.sh

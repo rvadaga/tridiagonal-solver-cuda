@@ -1,0 +1,26 @@
+#!/bin/sh
+# clear
+
+size_input=1024
+if [ -z "$1" ]; then
+	echo 'No size has been entered, size assumed as 1024'
+else
+	size_input=$1
+fi
+
+steps_input=10
+if [ -z "$2" ]; then
+	echo 'number of steps has not been entered, step size assumed as 10'
+else
+	steps_input=$2
+fi
+
+type_input=1
+if [ -z "$3" ]; then
+	echo 'Type info has not been entered, assumed type as cuComplex'
+else
+	type_input=$3
+fi
+
+./solver -size=$size_input -steps=$steps_input -type=$type_input
+# python plotter.py $size_input $steps_input

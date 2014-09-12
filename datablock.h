@@ -45,6 +45,7 @@ class Datablock
     int step;
     int totalSteps;
     int mPad;
+    T *gamma;
     T *h_gammaLeft;
     T *h_gammaRight;
     T *dx_2InvComplex;  // -1/(dx*dx)
@@ -56,7 +57,7 @@ class Datablock
     T *h_x_m_1;     // (m-1) element of x in Ax = B
     T *h_diagonal_0;       // 0 th element of main diagonal in Ax = B
     T *h_diagonal_m_1;     // (m-1) element of main diagonal in Ax = B
-    Datablock(int m_pad, int s, int steps, T dx_2InvCmplx, int l_stride)
+    Datablock(int m, int m_pad, int s, int steps, T dx_2InvCmplx, int l_stride)
     {
         T_size = sizeof(T);
 
@@ -107,6 +108,7 @@ class Datablock
         checkCudaErrors(cudaMallocHost((void **)&h_gammaLeft, T_size));
         checkCudaErrors(cudaMallocHost((void **)&dx_2InvComplex, T_size));
         checkCudaErrors(cudaMallocHost((void **)&dx_2InvComplex_1, T_size));
+        checkCudaErrors(cudaMallocHost((void **)&gamma, T_size * m));
 
         *dx_2InvComplex   = dx_2InvCmplx;
         *dx_2InvComplex_1 = cuNeg(dx_2InvCmplx);
