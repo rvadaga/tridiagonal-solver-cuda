@@ -478,73 +478,7 @@ void gtsv_randomMatrix(int m, int steps)
     checkCudaErrors(cudaGetLastError());
     checkCudaErrors(cudaMemcpy(h_x_gpu, b, m*T_size, cudaMemcpyDeviceToHost));
     checkCudaErrors(cudaMemcpy(h_bNew_gpu, bNew, m*T_size, cudaMemcpyDeviceToHost));
-    /*
-    // a is lower diagonal
-    // b is main diagonal
-    // c is upper diagonal
-    // d is the rhs
-    def c_TDMA_Solver(a, b, c, d):
-    x = zeros(len(d),dtype='complex')
-    gamma = zeros(len(d),dtype='complex')
-    n = len(d)
-    beta = b[0]
-    code = """
-        x(0) = d(0)/beta;
-        int i;
-        for (i=1; i<n; i++){
-            gamma(i) = c(i-1)/beta;
-            beta = b(i)-a(i)*gamma(i);
-            x(i) = (d(i)-a(i)*x(i-1))/beta;
-        }
-        int k;
-        for (i=1; i<n; i++){
-            k = n-i;
-            x(k-1) = x(k-1)-gamma(k)*x(k);
-        }
-        """
-    inline(code, ['a', 'b', 'c', 'd', 'x', 'gamma', 'n', 'beta'], type_converters=blitz, compiler='gcc', verbose=1)
-    return x
-    # end of py code
-    */
-    // # begin of cpu code to be uncommented later
-    // setting first elements
-    // first element in sub-diagonal is equal to 0 
-    h_dl[0]   = cuGet<T>((T_REAL)0.0, (T_REAL)0.0); 
-    h_d[0]    = cuFma(dx_2InvComplex, gammaLeft, constLhsTop);
-    h_rhsUpdateArray[0] = constRhsTop;
-    h_du[0]   = dx_2InvComplex;
-
-    // setting last elements
-    h_dl[m-1] = dx_2InvComplex;
-    h_d[m-1]  = cuFma(dx_2InvComplex, gammaRight, constLhsBot);
-    h_rhsUpdateArray[m-1] = constRhsBot;
-    h_du[m-1] = cuGet<T>((T_REAL)0.0, (T_REAL)0.0);
-    // last element in super diagonal is equal to 0
     
-    // By following this convention, we can access elements of dl, du, d present in the same row by the row's index.
-
-    h_b[0] = cuMul(cuFma(gammaLeft, dx_2InvComplex, constRhsTop), h_Ex[1]);
-    h_b[0] = cuFma(dx_2InvComplex, h_Ex[2], h_b[0]);
-    h_b[m-1] = cuMul(cuFma(gammaRight, dx_2InvComplex, constRhsTop), h_Ex[m-1]);
-    h_b[m-1] = cuFma(dx_2InvComplex, h_Ex[m-2], h_b[m-1]);
-
-    // setting interior elements
-    for(int k=1; k<m-1; k++)
-    {
-        h_dl[k] = dx_2InvComplex;
-        h_du[k] = dx_2InvComplex;
-        h_d[k]  = cuGet<T>(2*dx_2Inv - k0_2*(pow(h_n[k+1], 2) - pow(nRef, 2)), 4*beta*dzInv);
-        h_rhsUpdateArray[k]  = cuGet<T>(-2*dx_2Inv + k0_2*(pow(h_n[k+1], 2) - pow(nRef, 2)), 4*beta*dzInv);
-        // h_b[k]  = cuGet<T>((-2*dx_2Inv + k0_2*(pow(h_n[k+1], 2) - pow(nRef, 2))) * cuReal(h_Ex[k+1]) - 4*beta*dzInv*cuImag(h_Ex[k+1]) + dx_2Inv * (cuReal(h_Ex[k]) + cuReal(h_Ex[k+2])), (-2*dx_2Inv + k0_2*(pow(h_n[k+1], 2) - pow(nRef, 2))) * cuImag(h_Ex[k+1]) + 4*beta*dzInv * cuReal(h_Ex[k+1]) + dx_2Inv * (cuImag(h_Ex[k]) + cuImag(h_Ex[k+2])));
-        h_b[k]  = cuMul(cuGet<T>(dx_2InvComplex_1), h_Ex[k]);
-        h_b[k]  = cuFma(cuGet<T>(-2*dx_2Inv + k0_2*(pow(h_n[k+1], 2) - pow(nRef, 2)), 4*beta*dzInv), h_Ex[k+1], h_b[k]);
-        h_b[k]  = cuFma(cuGet<T>(dx_2InvComplex_1), h_Ex[k+2], h_b[k]);
-    }
-    for(int k=1; k<m-1; k++)
-    {
-        h_rhsUpdateArray[k]  = cuGet<T>(-2*dx_2Inv + k0_2*(pow(h_n[k+1], 2) - pow(nRef, 2)), 4*beta*dzInv);
-    }
-
     start = get_second();
     for(int i=0; i<steps; i++)
     {
@@ -552,13 +486,12 @@ void gtsv_randomMatrix(int m, int steps)
         tridiagonalSolverHost<T, T_REAL>(&data, h_dl, h_d, h_du, h_b, h_bNew, h_rhsUpdateArray, h_field, m);
     }
     stop = get_second();
-    
     printf("time on cpu = %.6f s\n", stop-start);
-    // # end of cpu code to be uncommented later 
+
     compare_result<T, T_REAL>(h_field, h_x_gpu, m, 1e-10, 1e-10, 50, stride);
     compare_result<T, T_REAL>(h_bNew, h_bNew_gpu, m, 1e-10, 1e-10, 50, stride);
     
-    // Uncomment the next 12 lines only when program is being tested for 1 step.
+    // Uncomment the next 12 lines only when program is being run without CPU computation
     // gammaLeft = cuDiv(h_x_gpu[0], h_x_gpu[1]);
     // gammaRight = cuDiv(h_x_gpu[m-1], h_x_gpu[m-2]);
     // h_rhsUpdateArray[0] = cuFma(gammaLeft, cuGet<T>(dx_2InvComplex_1), h_rhsUpdateArray[0]);    

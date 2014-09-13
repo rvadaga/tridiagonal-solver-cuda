@@ -58,7 +58,7 @@ void tridiagonalSolver(Datablock<T, T_REAL> *data, const T* dl, T* d, const T* d
     T* c2_buffer    = data->c2_buffer;    // stores modified diagonal elements in diagonal pivoting method
     T* bNew_buffer  = data->bNew_buffer;  // new DM B array after multiplying with updated A (here, B is in Ax = B) 
     T* rhsUpdateArrayBuffer  = data->rhsUpdateArrayBuffer;  // DM RHS update array
-    T* bottomElemBuffer      = data->bottomElemBuffer;
+    T* bottomElemBuffer      = data->bottomElemBuffer;      
     T* topElemBuffer         = data->topElemBuffer;
     bool *flag               = data->flag;
     
@@ -94,13 +94,14 @@ void tridiagonalSolver(Datablock<T, T_REAL> *data, const T* dl, T* d, const T* d
     T* h_gammaRight     = data->h_gammaRight;
     T* dx_2InvComplex   = data->dx_2InvComplex;     // equals -1/(dx*dx)
     T* dx_2InvComplex_1 = data->dx_2InvComplex_1;   // equals +1/(dx*dx)
+    checkCudaErrors(cudaMemset(bNew_buffer, 0, sizeof(T)*s*b_dim*stride));
 
     // kernels 
     // data layout transformation
     if(data->step == 0){
         forward_marshaling_bxb<T><<<gridDim, blockDim, marshaling_share_size>>>(dl_buffer, dl, stride, b_dim, m, cuGet<T>(0));
         forward_marshaling_bxb<T><<<gridDim, blockDim, marshaling_share_size>>>(du_buffer, du, stride, b_dim, m, cuGet<T>(0));
-        forward_marshaling_bxb<T><<<gridDim, blockDim, marshaling_share_size>>>(rhsUpdateArrayBuffer,  rhsUpdateArray,  stride, b_dim, m, cuGet<T>(0));
+        forward_marshaling_bxb<T><<<gridDim, blockDim, marshaling_share_size>>>(rhsUpdateArrayBuffer,  rhsUpdateArray,  stride, b_dim, m, cuGet<T>(1));
         forward_marshaling_bxb<T><<<gridDim, blockDim, marshaling_share_size>>>(d_buffer,  d,  stride, b_dim, m, cuGet<T>(1));
         forward_marshaling_bxb<T><<<gridDim, blockDim, marshaling_share_size>>>(b_buffer,  b,  stride, b_dim, m, cuGet<T>(0));
     }
@@ -125,6 +126,7 @@ void tridiagonalSolver(Datablock<T, T_REAL> *data, const T* dl, T* d, const T* d
     // printf("h_x_m_1 = %E.\n", cuAbs(*h_x_m_1));
     // *h_gammaLeft     = cuDiv(*h_x_0, *h_x_1);
     // *h_gammaRight    = cuDiv(*h_x_m_1, *h_x_m_2);
+    
     *h_gammaLeft     = cuGet<T>((T_REAL)0.0, (T_REAL)0.0);
     *h_gammaRight    = cuGet<T>((T_REAL)0.0, (T_REAL)0.0);
     *h_diagonal_0    = cuFma(*h_gammaLeft, *dx_2InvComplex_1, *(data->constRhsTop));
@@ -147,11 +149,10 @@ void tridiagonalSolver(Datablock<T, T_REAL> *data, const T* dl, T* d, const T* d
     for (int i=0; i<s; i++)
         checkCudaErrors(cudaMemcpy(bottomElemBuffer + i*b_dim, b_buffer + i*blockSize, sizeof(T)*b_dim, cudaMemcpyDeviceToDevice));
 
-    bottomElemBuffer += 1;
-    checkCudaErrors(cudaMemset(bottomElemBuffer + s*b_dim - 1, 0, sizeof(T)));
+    checkCudaErrors(cudaMemset(bottomElemBuffer + s*(b_dim), 0, sizeof(T)));
 
     // finds new RHS with rhsUpdateArrayBuffer having its 1st and last elements modified
-    multiply_kernel<T><<<s, b_dim>>>(rhsUpdateArrayBuffer, topElemBuffer, bottomElemBuffer, b_buffer, bNew_buffer, stride, tile);
+    multiply_kernel<T><<<s, b_dim>>>(rhsUpdateArrayBuffer, topElemBuffer, bottomElemBuffer+1, b_buffer, bNew_buffer, stride, tile);
 
     // do back data marshaling only in the last step
     if(data->step == (data->totalSteps)-1){

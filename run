@@ -23,4 +23,4 @@ else
 fi
 
 ./solver -size=$size_input -steps=$steps_input -type=$type_input
-# python plotter.py $size_input $steps_input
+python plotter.py $size_input $steps_input

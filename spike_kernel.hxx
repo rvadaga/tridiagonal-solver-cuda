@@ -848,6 +848,8 @@ __global__ void multiply_kernel(const T* d, const T* tElem, const T* bElem, cons
                 b[ix] = b_k;
                 x_k_1 = x_k_2;
                 x_k_2 = x_k_3;
+                if(cuAbs(x_k_3) == 0.0) k=stride;
+                if(cuAbs(x_k_3) == 0.0) break;
                 ix += b_dim;
                 d_k = d[ix];
                 x_k_3 = x[ix+b_dim];
