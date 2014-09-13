@@ -174,16 +174,15 @@ __global__ void  back_marshaling_bxb (
 
 template <typename bElem , typename bElem_REAL> 
 __global__ void tiled_diag_pivot_x1(
-                                      bElem* x,            // rhs array (b_buffer)
-                                      bElem* w,            // left halo (w_buffer)
-                                      bElem* v,            // right halo (v_buffer)
-                                      bElem* b_buffer,     // modified msin diagonal (c2_buffer)
-                                      bool *flag,           // buffer to tag pivot (flag)
-                                      const bElem* a,      // lower diagonal (dl_buffer)
-                                      const bElem* b,      // main diagonal (d_buffer)
-                                      const bElem* c,      // upper diagonal (du_buffer)
+                                      bElem* x,             // rhs array (b_buffer)
+                                      bElem* w,             // left halo (w_buffer)
+                                      bElem* v,             // right halo (v_buffer)
+                                      bElem* b_buffer,      // modified msin diagonal (c2_buffer)
+                                      const bElem* a,       // lower diagonal (dl_buffer)
+                                      const bElem* b,       // main diagonal (d_buffer)
+                                      const bElem* c,       // upper diagonal (du_buffer)
                                       const int stride,     // h_stride (stride)
-                                      const int tile       // tile
+                                      const int tile        // tile
                                       )                                    
 {
     
@@ -201,8 +200,6 @@ __global__ void tiled_diag_pivot_x1(
     bElem w_k, w_k_1;
     bElem v_k_1;
     
-    bElem_REAL kappa = (sqrt(5.0)-1.0)/2.0;
-
     // elements in the first row
     b_k = b[ix];
     c_k = c[ix];
@@ -227,134 +224,53 @@ __global__ void tiled_diag_pivot_x1(
     {
         while(k < (stride*i)/tile)
         {        
-            bElem_REAL sigma;
+            bElem b_inv = cuDiv(cuGet<bElem>(1), b_k);
             
-            // math.h has an intrinsics for float, double 
-            sigma = max(cuAbs(c_k), cuAbs(a_k_1));
-            sigma = max(sigma,      cuAbs(b_k_1));
-            sigma = max(sigma,      cuAbs(c_k_1));
-            sigma = max(sigma,      cuAbs(a_k_2));          
+            x_k = cuMul(x_k, b_inv);
+            w_k = cuMul(w_k, b_inv);
             
-            // if condition is satisfied, 1 by 1 pivoting ==> d = 1
-            if(cuMul(cuAbs(b_k), sigma) >= cuMul(kappa, cuMul(cuAbs(c_k), cuAbs(a_k_1))))
-            {    
-                bElem b_inv = cuDiv(cuGet<bElem>(1), b_k);
-                flag[ix] = true; // if 1 by 1 pivoting, set flag = 1
-                
-                x_k = cuMul(x_k, b_inv);
-                w_k = cuMul(w_k, b_inv);
-                
-                x[ix] = x_k;        // row k
-                w[ix] = w_k;        // row k
-                b_buffer[ix] = b_k; // row k
+            x[ix] = x_k;        // row k
+            w[ix] = w_k;        // row k
+            b_buffer[ix] = b_k; // row k
 
-                if(k < stride-1)    // runs as long as we are not in last row
+            if(k < stride-1)    // runs as long as we are not in last row
+            {
+                ix += b_dim;
+                // update elements in k+1 row                           
+                x_k = cuFma(cuNeg(a_k_1), x_k, x_k_1);                  // k+1 row
+                w_k = cuMul(cuNeg(a_k_1), w_k);                         // k+1 row                                  
+                b_k = cuFma(cuNeg(a_k_1), cuMul(c_k, b_inv), b_k_1);    // k+1 row
+
+                if(k < stride-2) // runs on all rows excluding last, last but 1.                
                 {
-                    ix += b_dim;
-                    // update elements in k+1 row                           
-                    x_k = cuFma(cuNeg(a_k_1), x_k, x_k_1);                  // k+1 row
-                    w_k = cuMul(cuNeg(a_k_1), w_k);                         // k+1 row                                  
-                    b_k = cuFma(cuNeg(a_k_1), cuMul(c_k, b_inv), b_k_1);    // k+1 row
-
-                    if(k < stride-2) // runs on all rows excluding last, last but 1.                
-                    {
-                        // update elements in k+1, k+2 row and set elements in k+3 row
-                        b_k_1 = b[ix+b_dim];  // k+2 row
-                        a_k_1 = a_k_2;        // k+2 row
-                        // x_k_1 = d[ix+b_dim];
-                        x_k_1 = x[ix+b_dim];  // k+2 row
-                        c_k   = c_k_1;        // k+1 row
-                        c_k_1 = c[ix+b_dim];  // k+2 row
-                        
-                        a_k_2 = k < (stride-3) ? a[ix+2*b_dim] : cuGet<bElem>(0); // k+3 row
-                    }
-
-                    else  // k = stride-2, runs on last but 1 row
-                    {
-                        b_k_1 = cuGet<bElem>(0);
-                        a_k_1 = cuGet<bElem>(0);
-                        x_k_1 = cuGet<bElem>(0);
-                        c_k   = cuGet<bElem>(0);
-                        c_k_1 = cuGet<bElem>(0);
-                        a_k_2 = cuGet<bElem>(0);
-                    }
-                }
-
-                else  // k = stride-1, runs on last row
-                {
-                    v[ix] = cuMul(c[ix], b_inv); // update v[last row]
-                    ix   += b_dim;
-                }
-
-                k += 1;
-                // atomicAdd(&pivotingData[0], 1);                                         
-            }
-            
-            // do 2 by 2 pivoting ==> d = 2
-            else
-            {       
-                bElem delta;
-                flag[ix] = false; // flag = 0 if 2-by-2 pivoting
-
-                // finding determinant of block B_1
-                delta = cuFma(b_k, b_k_1, cuNeg(cuMul(c_k, a_k_1)));
-                delta = cuDiv(cuGet<bElem>(1), delta);
-                x[ix] = cuFma(x_k, b_k_1, cuNeg(cuMul(c_k, x_k_1))); // k row
-                x[ix] = cuMul(x[ix], delta);
-                
-                w[ix] = cuMul(w_k, cuMul(b_k_1, delta)); // k row
-                b_buffer[ix] = b_k;             
-                
-                x_k_1 = cuFma(b_k, x_k_1, cuNeg(cuMul(a_k_1, x_k))); // k+1 row
-                x_k_1 = cuMul(x_k_1, delta);
-                w_k_1 = cuMul(cuMul(cuNeg(a_k_1), w_k), delta);   // k+1 row
-                
-                x[ix+b_dim]        = x_k_1;   // k+1 row
-                w[ix+b_dim]        = w_k_1;   // k+1 row
-                b_buffer[ix+b_dim] = b_k_1;            
-                flag[ix+b_dim]     = false;
-                
-                if(k < stride-2) // runs on all rows except last, last but 1.
-                {
-                    ix += 2*b_dim;      
-                    // update                   
-                    // x_k = cuFma(cuNeg(a_k_2), x_k_1, d[ix]);          // k+2 row
-                    x_k = cuFma(cuNeg(a_k_2),       x_k_1, x[ix]);       // k+2 row              
-                    w_k = cuMul(cuNeg(a_k_2),       w_k_1);              // k+2 row                 
-                    b_k = cuMul(cuMul(a_k_2, b_k),  cuMul(c_k_1, delta));// k+2 row
-                    b_k = cuSub(b[ix], b_k);
+                    // update elements in k+1, k+2 row and set elements in k+3 row
+                    b_k_1 = b[ix+b_dim];  // k+2 row
+                    a_k_1 = a_k_2;        // k+2 row
+                    // x_k_1 = d[ix+b_dim];
+                    x_k_1 = x[ix+b_dim];  // k+2 row
+                    c_k   = c_k_1;        // k+1 row
+                    c_k_1 = c[ix+b_dim];  // k+2 row
                     
-                    if(k < stride-3) // runs on all rows excluding last, last but 1, last but 2
-                    {
-                        // load new data
-                        c_k   = c[ix];          // k+2 row
-                        b_k_1 = b[ix+b_dim];    // k+3 row
-                        a_k_1 = a[ix+b_dim];    // k+3 row
-                        c_k_1 = c[ix+b_dim];    // k+3 row
-                        // x_k_1 = d[ix+b_dim]; // k+3 row
-                        x_k_1 = x[ix+b_dim];    // k+3 row
-                        a_k_2 = k < stride-4 ? a[ix+2*b_dim] : cuGet<bElem>(0);
-                    }
-                    else    // k = stride-3, runs on last but 2 row
-                    {
-                        b_k_1 = cuGet<bElem>(0);
-                        a_k_1 = cuGet<bElem>(0);
-                        c_k   = cuGet<bElem>(0);
-                        c_k_1 = cuGet<bElem>(0);
-                        x_k_1 = cuGet<bElem>(0);
-                        a_k_2 = cuGet<bElem>(0);
-                    }
+                    a_k_2 = k < (stride-3) ? a[ix+2*b_dim] : cuGet<bElem>(0); // k+3 row
                 }
-                else        // k = stride-2, runs on last but 1 row
+
+                else  // k = stride-2, runs on last but 1 row
                 {
-                    bElem v_temp;
-                    v_temp = cuMul(c[ix+b_dim], delta);                 
-                    v[ix]  = cuMul(v_temp,      cuNeg(c_k));
-                    v[ix+b_dim] = cuMul(v_temp, b_k);
-                    ix += 2*b_dim;
-                }               
-                k += 2;             
+                    b_k_1 = cuGet<bElem>(0);
+                    a_k_1 = cuGet<bElem>(0);
+                    x_k_1 = cuGet<bElem>(0);
+                    c_k   = cuGet<bElem>(0);
+                    c_k_1 = cuGet<bElem>(0);
+                    a_k_2 = cuGet<bElem>(0);
+                }
+            }   
+
+            else  // k = stride-1, runs on last row
+            {
+                v[ix] = cuMul(c[ix], b_inv); // update v[last row]
+                ix   += b_dim;
             }
+            k += 1;
         }
     }
 
@@ -364,22 +280,10 @@ __global__ void tiled_diag_pivot_x1(
     k  -= 1;
     ix -= b_dim;
 
-    if(flag[ix]) // 1-by-1 pivoting
-    {
-        x_k_1 = x[ix];
-        w_k_1 = w[ix];
-        v_k_1 = v[ix];
-        k    -= 1;
-        // x[ix]
-    }
-    else // 2-by-2 pivoting
-    {
-        ix   -= b_dim;
-        x_k_1 = x[ix];
-        w_k_1 = w[ix];
-        v_k_1 = v[ix];
-        k    -= 2;
-    }
+    x_k_1 = x[ix];
+    w_k_1 = w[ix];
+    v_k_1 = v[ix];
+    k    -= 1;
 
     ix -= b_dim;
     
@@ -387,49 +291,18 @@ __global__ void tiled_diag_pivot_x1(
     {
         while(k>=(i*stride)/tile)
         {
-            if(flag[ix]) // 1-by-1 pivoting
-            {   
-                c_k = c[ix];
-                b_k = b_buffer[ix];             
-                
-                bElem tempDiv = cuDiv(cuNeg(c_k), b_k);
-                x_k_1 = cuFma(x_k_1, tempDiv, x[ix]);                               
-                w_k_1 = cuFma(w_k_1, tempDiv, w[ix]);                
-                v_k_1 = cuMul(v_k_1, tempDiv);
-                
-                x[ix] = x_k_1;
-                w[ix] = w_k_1;
-                v[ix] = v_k_1;
-                k -= 1;
-            }
-            else // 
-            {
-                bElem delta;
-                b_k   = b_buffer[ix-b_dim];
-                c_k   = c[ix-b_dim];
-                a_k_1 = a[ix];
-                b_k_1 = b_buffer[ix];
-                c_k_1 = c[ix];
-                delta = cuFma(b_k, b_k_1, cuNeg(cuMul(c_k, a_k_1)));
-                delta = cuDiv(cuGet<bElem>(1), delta);                 
-                
-                bElem prod = cuMul(c_k_1, cuMul(b_k, delta));
-                
-                x[ix] = cuFma(cuNeg(x_k_1), prod, x[ix]);
-                w[ix] = cuFma(cuNeg(w_k_1), prod, w[ix]);
-                v[ix] = cuMul(cuNeg(v_k_1), prod);
-                
-                ix   -= b_dim;
-                prod  = cuMul(c_k_1, cuMul(c_k, delta));
-                
-                x_k_1 = cuFma(x_k_1, prod, x[ix]);
-                w_k_1 = cuFma(w_k_1, prod, w[ix]);
-                v_k_1 = cuMul(v_k_1, prod);
-                x[ix] = x_k_1;
-                w[ix] = w_k_1;                 
-                v[ix] = v_k_1; 
-                k -= 2;
-            }             
+            c_k = c[ix];
+            b_k = b_buffer[ix];             
+            
+            bElem tempDiv = cuDiv(cuNeg(c_k), b_k);
+            x_k_1 = cuFma(x_k_1, tempDiv, x[ix]);                               
+            w_k_1 = cuFma(w_k_1, tempDiv, w[ix]);                
+            v_k_1 = cuMul(v_k_1, tempDiv);
+            
+            x[ix] = x_k_1;
+            w[ix] = w_k_1;
+            v[ix] = v_k_1;
+            k -= 1;
             ix -= b_dim;         
         }            
     }    

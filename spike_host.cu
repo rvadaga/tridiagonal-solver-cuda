@@ -41,14 +41,6 @@ void tridiagonalSolver(Datablock<T, T_REAL> *data, const T* dl, T* d, const T* d
     cudaFuncSetCacheConfig(spike_GPU_back_sub_x1<T>,cudaFuncCachePreferL1);
     cudaFuncSetCacheConfig(multiply_kernel<T>,cudaFuncCachePreferL1);
     
-    // variables for finding no of 1 by 1 pivotings
-    // int *h_pivotingData;
-    // int *pivotingData;
-
-    // h_pivotingData = (int *)malloc(sizeof(int));
-    // checkCudaErrors(cudaMalloc((void **)&pivotingData, sizeof(int)));
-    // checkCudaErrors(cudaMemset((void *)pivotingData, 0, sizeof(int)));
-
     T* dl_buffer    = data->dl_buffer;    // lower digonal after DM
     T* d_buffer     = data->d_buffer;     // diagonal after DM
     T* du_buffer    = data->du_buffer;    // upper diagonal after DM
@@ -60,7 +52,6 @@ void tridiagonalSolver(Datablock<T, T_REAL> *data, const T* dl, T* d, const T* d
     T* rhsUpdateArrayBuffer  = data->rhsUpdateArrayBuffer;  // DM RHS update array
     T* bottomElemBuffer      = data->bottomElemBuffer;      
     T* topElemBuffer         = data->topElemBuffer;
-    bool *flag               = data->flag;
     
     T* x_level_2 = data->x_level_2;
     T* w_level_2 = data->w_level_2;
@@ -107,7 +98,7 @@ void tridiagonalSolver(Datablock<T, T_REAL> *data, const T* dl, T* d, const T* d
     }
 
     // partitioned solver
-    tiled_diag_pivot_x1<T,T_REAL><<<s, b_dim>>>(b_buffer, w_buffer, v_buffer, c2_buffer, flag, dl_buffer, d_buffer, du_buffer, stride, tile);
+    tiled_diag_pivot_x1<T,T_REAL><<<s, b_dim>>>(b_buffer, w_buffer, v_buffer, c2_buffer, dl_buffer, d_buffer, du_buffer, stride, tile);
     
     // SPIKE solver
     spike_local_reduction_x1<T><<<s, b_dim, local_reduction_share_size>>>(b_buffer, w_buffer, v_buffer, x_level_2, w_level_2, v_level_2, stride);
@@ -174,8 +165,6 @@ void tridiagonalSolver(Datablock<T, T_REAL> *data, const T* dl, T* d, const T* d
     }
 
     // cudaMemcpy(h_gammaLeft, d_gamma)
-    // cudaMemcpy(h_pivotingData, pivotingData, sizeof(int), cudaMemcpyDeviceToHost);
-    // printf("No of 1 by 1 pivotings done = %d.\n", *h_pivotingData);
     // printf("Solving done.\n\n");
     // free pivotingData both h and dev
     // use checkCudaErrors for all cudaMallocs
