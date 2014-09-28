@@ -2,6 +2,8 @@
 #define __DATABLOCK__
 #include <cuda_runtime.h>
 #include <helper_cuda.h>
+#include <assert.h>
+#include <stdlib.h>
 //#include "cusparse_ops.hxx"
 
 template <typename T, typename T_REAL>
@@ -19,6 +21,7 @@ class Datablock
     int marshaledIndex_1;
     int marshaledIndex_m_2;
     int marshaledIndex_m_1;
+    FILE *fp2;
 
     bool* flag;     // tag for pivoting
     T* dl_buffer;   // lower digonal after DM
@@ -35,6 +38,7 @@ class Datablock
     T* bottomElemBuffer;        // stores all the elements required by each thread within a
                                 // thread block to compute its bottom element of upd. RHS
 
+    size_t pitch;
     T* constLhsTop;
     T* constLhsBot;
     T* constRhsTop;
@@ -46,6 +50,7 @@ class Datablock
     int totalSteps;
     int mPad;
     T *gamma;
+    T_REAL *field;
     T *h_gammaLeft;
     T *h_gammaRight;
     T *dx_2InvComplex;  // -1/(dx*dx)
@@ -74,7 +79,6 @@ class Datablock
         checkCudaErrors(cudaMalloc((void **)&rhsUpdateArrayBuffer, T_size*m_pad)); 
         checkCudaErrors(cudaMalloc((void **)&bottomElemBuffer, T_size*(l_stride+1)*s)); 
         checkCudaErrors(cudaMalloc((void **)&topElemBuffer, T_size*(l_stride+1)*s)); 
-        
         checkCudaErrors(cudaMallocHost((void **) &constLhsBot, T_size));
         checkCudaErrors(cudaMallocHost((void **) &constLhsTop, T_size));
         checkCudaErrors(cudaMallocHost((void **) &constRhsBot, T_size));
@@ -109,6 +113,13 @@ class Datablock
         checkCudaErrors(cudaMallocHost((void **)&dx_2InvComplex, T_size));
         checkCudaErrors(cudaMallocHost((void **)&dx_2InvComplex_1, T_size));
         checkCudaErrors(cudaMallocHost((void **)&gamma, T_size * m));
+        
+        checkCudaErrors(cudaMallocPitch( (void **) &field,
+                        &pitch, 
+                        sizeof(T_REAL)*s*l_stride,
+                        steps));
+        printf("pitch = %d\n", (int)pitch);
+        fp2 = fopen("outputField", "w");
 
         *dx_2InvComplex   = dx_2InvCmplx;
         *dx_2InvComplex_1 = cuNeg(dx_2InvCmplx);

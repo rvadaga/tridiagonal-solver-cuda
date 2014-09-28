@@ -15,7 +15,7 @@ else
 	steps_input=$2
 fi
 
-type_input=1
+type_input=2
 if [ -z "$3" ]; then
 	echo 'Type info has not been entered, assumed type as cuComplex'
 else
@@ -23,4 +23,4 @@ else
 fi
 
 ./solver -size=$size_input -steps=$steps_input -type=$type_input
-python plotter.py $size_input $steps_input
+python plotter.py

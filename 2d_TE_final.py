@@ -45,7 +45,7 @@ eta0    = 120*pi
 dz  = 0.55                         # in microns
 L   = 20
 Nz  = int(L/dz)                    # no. of points in z-direction
-Nx  = 65537                         # no. of points to keep in x-direction
+Nx  = 2048                         # no. of points to keep in x-direction
 Nskip   = 1
 Npts    = int(Nz/Nskip)
 z   = linspace(0, L, Npts)
@@ -157,7 +157,7 @@ print abs(P.max())
 print 'The simulated effective index is %f' % neff_sim
 
 figure(2)
-contourf(x,linspace(0, L, Npts),((EX)))
+contourf(x, linspace(0, L, Npts),((EX)))
 xlabel('$x$')
 ylabel('$z$')
 title('Contour Plot of Electric Field')

@@ -287,6 +287,7 @@ void gtsv_randomMatrix(int m, int steps)
     T *h_field;         // field array to store x in cpu computation
     T *h_rhsUpdateArray;// array to be multiplied for RHS update
     T *h_bNew;          // bNew after n steps on CPU
+    T_REAL *field;
     
     T *h_x_gpu;     // results from GPU
     T *h_bNew_gpu;  // copies updated RHS from GPU
@@ -297,12 +298,12 @@ void gtsv_randomMatrix(int m, int steps)
     T_REAL  *h_n;   // refractive index profile
 
     // vectors on the device
-    T       *dl;    // lower diagonal in B
-    T       *d;     // main diagonal in B
-    T       *du;    // upper diagonal in B
-    T       *b;     // B in Ax = B
-    T       *bNew;  // to store new RHS array on device
-    T       *rhsUpdateArray; // to store array which is to be multipled to get B new
+    T *dl;          // lower diagonal in B
+    T *d;           // main diagonal in B
+    T *du;          // upper diagonal in B
+    T *b;           // B in Ax = B
+    T *bNew;        // to store new RHS array on device
+    T *rhsUpdateArray; // to store array which is to be multipled to get B new
 
     // constants
     // printf("-------------------------------------------\n");
@@ -331,9 +332,12 @@ void gtsv_randomMatrix(int m, int steps)
     int tile_marshal = 16;  // blockDim in each direction for data marshaling
     int T_size = sizeof(T); // size of T
 
+
     // finds appropriate gridSize for data marshaling (will be referred to as DM from now on)
     findBestGrid<T>(m, tile_marshal, &m_pad, &b_dim, &s, &stride);
     printf("m = %d, m_pad = %d, s = %d, b_dim (l_stride) = %d, stride (h_stride) = %d\n", m, m_pad, s, b_dim, stride);    
+
+    FILE *fp3   = fopen("configFile", "w");
 
     // int local_reduction_share_size   = 2*b_dim*3*T_size;
     // int global_share_size            = 2*s*3*T_size;
@@ -341,6 +345,13 @@ void gtsv_randomMatrix(int m, int steps)
     // int marshaling_share_size        = tile_marshal*(tile_marshal+1)*T_size;
     
     Datablock<T, T_REAL> data(m, m_pad, s, steps, dx_2InvComplex, b_dim);
+    fprintf(fp3, "%d\n", m);
+    fprintf(fp3, "%d\n", m_pad);
+    fprintf(fp3, "%d\n", s);
+    fprintf(fp3, "%d\n", steps);
+    fprintf(fp3, "%d\n", b_dim);   
+    fprintf(fp3, "%d\n", stride);    
+
     dim3 gridDim(b_dim/tile_marshal, s);        // g_data
     dim3 blockDim(tile_marshal, tile_marshal);  // b_data
     data.setLaunchParameters(gridDim, blockDim, s, b_dim, tile_marshal, stride);
@@ -360,6 +371,9 @@ void gtsv_randomMatrix(int m, int steps)
     checkCudaErrors(cudaMallocHost((void **) &h_bNew_gpu, T_size * m));
     checkCudaErrors(cudaMallocHost((void **) &h_bNew_back, T_size * m));
     checkCudaErrors(cudaMallocHost((void **) &h_rhsUpdateArray, T_size * m));
+    field = (T_REAL *) malloc(sizeof(T_REAL)*s*b_dim*steps);
+    // T_REAL field[steps][s*b_dim];
+    assert(field != NULL);
     // file is meant to store result at every step
     FILE *fp1   = fopen("output", "w");
 
@@ -472,6 +486,20 @@ void gtsv_randomMatrix(int m, int steps)
     }
     stop = get_second();
     printf("time on gpu = %.6f s\n", stop-start);
+    checkCudaErrors(cudaMemcpy2D(   field, 
+                                    sizeof(T_REAL)*s*b_dim, 
+                                    data.field, 
+                                    data.pitch, 
+                                    sizeof(T_REAL)*s*b_dim, 
+                                    steps, 
+                                    cudaMemcpyDeviceToHost));
+    FILE *fp2   = fopen("outputField", "w");
+    for(int i=0; i<steps; i++){
+        for(int j=0; j<s*b_dim; j++){
+            fprintf(fp2, "%E\t", *(field + i*s*b_dim + j));
+        }
+        fprintf(fp2, "\n");
+    }
 
     // copy back the results to CPU
     cudaDeviceSynchronize();
@@ -553,11 +581,11 @@ main(int argc, char **argv)
     // get number of SMs on this GPU
     checkCudaErrors(cudaGetDevice(&devID));
     checkCudaErrors(cudaGetDeviceProperties(&deviceProp, devID));
-    // checkCudaErrors(cudaSetDevice(0));
-    // checkCudaErrors(cudaGetDeviceProperties(&deviceProp, 0));
+    checkCudaErrors(cudaSetDevice(0));
+    checkCudaErrors(cudaGetDeviceProperties(&deviceProp, 0));
 
-    // printf("> Device %d: \"%s\"\n", devID, deviceProp.name);
-    // printf("> SM Capability %d.%d detected.\n", deviceProp.major, deviceProp.minor);
+    printf("> Device %d: \"%s\"\n", devID, deviceProp.name);
+    printf("> SM Capability %d.%d detected.\n", deviceProp.major, deviceProp.minor);
     
     if (checkCmdLineFlag(argc, (const char **)argv, "size"))
     {

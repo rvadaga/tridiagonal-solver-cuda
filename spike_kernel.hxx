@@ -641,7 +641,7 @@ __global__ void spike_GPU_local_solving_x1(
 }
 
 // backward substitution for SPIKE solver
-template <typename T> 
+template <typename T, typename T_REAL> 
 __global__ void 
 spike_GPU_back_sub_x1
 (
@@ -649,7 +649,8 @@ T* x,
 const T* w,
 const T* v,
 const T* x_mirror,
-const int stride
+const int stride,
+T_REAL *field
 )
 {
     int tx;
@@ -685,10 +686,12 @@ const int stride
     
     int k;
     for(k=1; k<stride-1; k++)
-    {        
+    {
         x[base+tx+k*b_dim] = cuFma(w[base+tx+k*b_dim], cuNeg(x_up), x[base+tx+k*b_dim]);
         x[base+tx+k*b_dim] = cuFma(v[base+tx+k*b_dim], cuNeg(x_down), x[base+tx+k*b_dim]);
     }
+    field[(bx*b_dim)+tx] = cuAbs(x[base+tx]);
+    __syncthreads();
 }
 
 template<typename T>
@@ -707,31 +710,32 @@ __global__ void multiply_kernel(const T* d, const T* tElem, const T* bElem, cons
     x_k_2   = x[ix];            // term to be multiplied with d[k]
     x_k_3   = x[ix+b_dim];      // term to be multiplied with ud[k]
     x_k_last = bElem[ixBuffer]; // term to be multiplied with c[stride-1]
-
     int i;
-    for(i=1; i<=tile; i++) // dynamic tiling approach 
-    {
-        while(k < (stride*i)/tile)
+    if(cuAbs(x_k_2) != 0.0){
+        for(i=1; i<=tile; i++) // dynamic tiling approach 
         {
-            b_k = cuMul(cuGet<T>(constant1), x_k_1);
-            b_k = cuFma(d_k, x_k_2, b_k);    
-            if (k < stride-1) // till last but 1 row
+            while(k < (stride*i)/tile)
             {
-                b_k = cuFma(cuGet<T>(constant1), x_k_3, b_k);
-                b[ix] = b_k;
-                x_k_1 = x_k_2;
-                x_k_2 = x_k_3;
-                if(cuAbs(x_k_3) == 0.0) k=stride;
-                if(cuAbs(x_k_3) == 0.0) break;
-                ix += b_dim;
-                d_k = d[ix];
-                x_k_3 = x[ix+b_dim];
+                b_k = cuMul(cuGet<T>(constant1), x_k_1);
+                b_k = cuFma(d_k, x_k_2, b_k);    
+                if (k < stride-1) // till last but 1 row
+                {
+                    b_k = cuFma(cuGet<T>(constant1), x_k_3, b_k);
+                    b[ix] = b_k;
+                    x_k_1 = x_k_2;
+                    x_k_2 = x_k_3;
+                    if(cuAbs(x_k_3) == 0.0) k=stride;
+                    if(cuAbs(x_k_3) == 0.0) break;
+                    ix += b_dim;
+                    d_k = d[ix];
+                    x_k_3 = x[ix+b_dim];
+                }
+                if (k == stride-1){// last row
+                    b_k = cuFma(cuGet<T>(constant1), x_k_last, b_k);
+                    b[ix] = b_k;
+                }
+                k += 1;
             }
-            if (k == stride-1){// last row
-                b_k = cuFma(cuGet<T>(constant1), x_k_last, b_k);
-                b[ix] = b_k;
-            }
-            k += 1;
         }
     }
 }
