@@ -26,9 +26,9 @@ THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLI
 #include "cusparse_ops.hxx"
 
 //template <typename T>
-void setConstants(cuDoubleComplex *dx_2InvComplex)
+void setConstants(cuDoubleComplex *dx_2InvNeg)
 {
-     checkCudaErrors(cudaMemcpyToSymbol(constant1, dx_2InvComplex,
+     checkCudaErrors(cudaMemcpyToSymbol(constant1, dx_2InvNeg,
                     sizeof(cuDoubleComplex)));
      checkCudaErrors(cudaGetLastError());
 }
@@ -80,7 +80,7 @@ void tridiagonalSolver(Datablock<T, T_REAL> *data, const T* dl, T* d, const T* d
     // int marshaledIndex_1    = data->marshaledIndex_1;
     // int marshaledIndex_m_2  = data->marshaledIndex_m_2;
     int marshaledIndex_m_1  = data->marshaledIndex_m_1;
-    
+
     // T *h_x_0    = data->h_x_0;
     // T *h_x_1    = data->h_x_1;
     // T *h_x_m_2  = data->h_x_m_2;
@@ -90,8 +90,8 @@ void tridiagonalSolver(Datablock<T, T_REAL> *data, const T* dl, T* d, const T* d
 
     T* h_gammaLeft      = data->h_gammaLeft;
     T* h_gammaRight     = data->h_gammaRight;
-    T* dx_2InvComplex   = data->dx_2InvComplex;     // equals -1/(dx*dx)
-    T* dx_2InvComplex_1 = data->dx_2InvComplex_1;   // equals +1/(dx*dx)
+    T* dx_2InvNeg   = data->dx_2InvNeg;     // equals -1/(dx*dx)
+    T* dx_2InvPos = data->dx_2InvPos;   // equals +1/(dx*dx)
     checkCudaErrors(cudaMemset(bNew_buffer, 0, sizeof(T)*s*b_dim*stride));
 
     // kernels 
@@ -111,7 +111,7 @@ void tridiagonalSolver(Datablock<T, T_REAL> *data, const T* dl, T* d, const T* d
     spike_local_reduction_x1<T><<<s, b_dim, local_reduction_share_size>>>(b_buffer, w_buffer, v_buffer, x_level_2, w_level_2, v_level_2, stride);
     spike_GPU_global_solving_x1<<<1, 32, global_share_size>>>(x_level_2, w_level_2, v_level_2, s);
     spike_GPU_local_solving_x1<T><<<s, b_dim, local_solving_share_size>>>(b_buffer, w_buffer, v_buffer, x_level_2, stride);
-    spike_GPU_back_sub_x1<T, T_REAL><<<s, b_dim>>>(b_buffer, w_buffer, v_buffer, x_level_2, stride, field + step*pitch);
+    spike_GPU_back_sub_x1<T, T_REAL><<<s, b_dim>>>(b_buffer, w_buffer, v_buffer, x_level_2, stride, field + step*pitch/sizeof(T_REAL));
     // checkCudaErrors(cudaMemcpy(h_field, field, sizeof(T_REAL)*s*b_dim, cudaMemcpyDeviceToHost));
     // FILE *fp2 = data->fp2;
     // for(int i=0; i<s*b_dim; i++){
@@ -133,8 +133,8 @@ void tridiagonalSolver(Datablock<T, T_REAL> *data, const T* dl, T* d, const T* d
     
     *h_gammaLeft     = cuGet<T>((T_REAL)0.0, (T_REAL)0.0);
     *h_gammaRight    = cuGet<T>((T_REAL)0.0, (T_REAL)0.0);
-    *h_diagonal_0    = cuFma(*h_gammaLeft, *dx_2InvComplex_1, *(data->constRhsTop));
-    *h_diagonal_m_1  = cuFma(*h_gammaRight, *dx_2InvComplex_1, *(data->constRhsBot));
+    *h_diagonal_0    = cuFma(*h_gammaLeft, *dx_2InvPos, *(data->constRhsTop));
+    *h_diagonal_m_1  = cuFma(*h_gammaRight, *dx_2InvPos, *(data->constRhsBot));
 
     checkCudaErrors(cudaMemcpy(rhsUpdateArrayBuffer, h_diagonal_0, sizeof(T), cudaMemcpyHostToDevice));
     checkCudaErrors(cudaMemcpy(rhsUpdateArrayBuffer+marshaledIndex_m_1, h_diagonal_m_1, sizeof(T), cudaMemcpyHostToDevice));
@@ -173,8 +173,8 @@ void tridiagonalSolver(Datablock<T, T_REAL> *data, const T* dl, T* d, const T* d
         checkCudaErrors(cudaMemcpy(b_buffer, bNew_buffer, sizeof(T)*data->mPad, cudaMemcpyDeviceToDevice));
         
         // modifying main diagonal
-        *h_diagonal_0    = cuFma(*h_gammaLeft, *dx_2InvComplex, *(data->constLhsTop));
-        *h_diagonal_m_1  = cuFma(*h_gammaRight, *dx_2InvComplex, *(data->constLhsBot));
+        *h_diagonal_0    = cuFma(*h_gammaLeft, *dx_2InvNeg, *(data->constLhsTop));
+        *h_diagonal_m_1  = cuFma(*h_gammaRight, *dx_2InvNeg, *(data->constLhsBot));
         
         checkCudaErrors(cudaMemcpy(d_buffer, h_diagonal_0, sizeof(T), cudaMemcpyHostToDevice));
         checkCudaErrors(cudaMemcpy(d_buffer+marshaledIndex_m_1, h_diagonal_m_1, sizeof(T), cudaMemcpyHostToDevice));
@@ -194,8 +194,8 @@ void tridiagonalSolverHost(Datablock<T, T_REAL> *data, const T* dl, T* d, const 
 {
     T* h_gammaLeft      = data->h_gammaLeft;
     T* h_gammaRight     = data->h_gammaRight;
-    T* dx_2InvComplex   = data->dx_2InvComplex;     // equals -1/(dx*dx)
-    T* dx_2InvComplex_1 = data->dx_2InvComplex_1;   // equals +1/(dx*dx)
+    T* dx_2InvNeg   = data->dx_2InvNeg;     // equals -1/(dx*dx)
+    T* dx_2InvPos = data->dx_2InvPos;   // equals +1/(dx*dx)
     T *gamma = data->gamma;
     T *h_diagonal_m_1  = data->h_diagonal_m_1;
     T *h_diagonal_0  = data->h_diagonal_0;
@@ -216,29 +216,29 @@ void tridiagonalSolverHost(Datablock<T, T_REAL> *data, const T* dl, T* d, const 
 
     *h_gammaLeft     = cuGet<T>((T_REAL)0.0, (T_REAL)0.0);
     *h_gammaRight    = cuGet<T>((T_REAL)0.0, (T_REAL)0.0);
-    *h_diagonal_0    = cuFma(*h_gammaLeft, *dx_2InvComplex_1, *(data->constRhsTop));
-    *h_diagonal_m_1  = cuFma(*h_gammaRight, *dx_2InvComplex_1, *(data->constRhsBot));
+    *h_diagonal_0    = cuFma(*h_gammaLeft, *dx_2InvPos, *(data->constRhsTop));
+    *h_diagonal_m_1  = cuFma(*h_gammaRight, *dx_2InvPos, *(data->constRhsBot));
     rhsUpdateArray[0] = *h_diagonal_0;
     rhsUpdateArray[m-1] = *h_diagonal_m_1;
 
-    bNew[0] = cuAdd(cuMul(rhsUpdateArray[0], x[0]), cuMul(*dx_2InvComplex_1, x[1]));
-    bNew[m-1] = cuAdd(cuMul(*dx_2InvComplex_1, x[m-2]), cuMul(rhsUpdateArray[m-1], x[m-1]));
+    bNew[0] = cuAdd(cuMul(rhsUpdateArray[0], x[0]), cuMul(*dx_2InvPos, x[1]));
+    bNew[m-1] = cuAdd(cuMul(*dx_2InvPos, x[m-2]), cuMul(rhsUpdateArray[m-1], x[m-1]));
     for (i=1; i<m-1; i++){
-        // bNew[i] = dx_2InvComplex_1*x[i-1] + rhsUpdateArray[i]*x[i] + dx_2InvComplex_1*x[i+1];
-        bNew[i] = cuMul(*dx_2InvComplex_1, x[i-1]);
+        // bNew[i] = dx_2InvPos*x[i-1] + rhsUpdateArray[i]*x[i] + dx_2InvPos*x[i+1];
+        bNew[i] = cuMul(*dx_2InvPos, x[i-1]);
         bNew[i] = cuFma(rhsUpdateArray[i], x[i], bNew[i]);
-        bNew[i] = cuFma(*dx_2InvComplex_1, x[i+1], bNew[i]);
+        bNew[i] = cuFma(*dx_2InvPos, x[i+1], bNew[i]);
     }
 
     if (data->step != (data->totalSteps-1)){
-        d[0] = cuFma(*h_gammaLeft, *dx_2InvComplex, *(data->constLhsTop));
-        d[m-1] = cuFma(*h_gammaLeft, *dx_2InvComplex, *(data->constLhsBot));
+        d[0] = cuFma(*h_gammaLeft, *dx_2InvNeg, *(data->constLhsTop));
+        d[m-1] = cuFma(*h_gammaLeft, *dx_2InvNeg, *(data->constLhsBot));
         memcpy(b, bNew, sizeof(T)*m);
     }
 }
 
 // template<typename T>
-// void set_constants(T *dx_2InvComplex);
+// void set_constants(T *dx_2InvNeg);
 // template void set_constants<cuComplex>(cuComplex *);
 // template 
 // void set_constants<cuDoubleComplex>(cuDoubleComplex *);

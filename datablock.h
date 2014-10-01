@@ -53,8 +53,8 @@ class Datablock
     T_REAL *field;
     T *h_gammaLeft;
     T *h_gammaRight;
-    T *dx_2InvComplex;  // -1/(dx*dx)
-    T *dx_2InvComplex_1;// 1/(dx*dx)
+    T *dx_2InvNeg;  // -1/(dx*dx)
+    T *dx_2InvPos;// 1/(dx*dx)
 
     T *h_x_0;       // 0th element of x in Ax = B 
     T *h_x_1;       // 1st element of x in Ax = B 
@@ -65,17 +65,15 @@ class Datablock
     Datablock(int m, int m_pad, int s, int steps, T dx_2InvCmplx, int l_stride)
     {
         T_size = sizeof(T);
-
-        // buffer allocation
-        checkCudaErrors(cudaMalloc((void **)&flag,          sizeof(bool)*m_pad)); 
-        checkCudaErrors(cudaMalloc((void **)&dl_buffer,     T_size*m_pad)); 
-        checkCudaErrors(cudaMalloc((void **)&d_buffer,      T_size*m_pad)); 
-        checkCudaErrors(cudaMalloc((void **)&du_buffer,     T_size*m_pad)); 
-        checkCudaErrors(cudaMalloc((void **)&b_buffer,      T_size*m_pad)); 
-        checkCudaErrors(cudaMalloc((void **)&w_buffer,      T_size*m_pad)); 
-        checkCudaErrors(cudaMalloc((void **)&v_buffer,      T_size*m_pad)); 
-        checkCudaErrors(cudaMalloc((void **)&c2_buffer,     T_size*m_pad)); 
-        checkCudaErrors(cudaMalloc((void **)&bNew_buffer,   T_size*m_pad)); 
+        checkCudaErrors(cudaMalloc((void **)&flag, sizeof(bool)*m_pad)); 
+        checkCudaErrors(cudaMalloc((void **)&dl_buffer, T_size*m_pad)); 
+        checkCudaErrors(cudaMalloc((void **)&d_buffer, T_size*m_pad)); 
+        checkCudaErrors(cudaMalloc((void **)&du_buffer, T_size*m_pad)); 
+        checkCudaErrors(cudaMalloc((void **)&b_buffer, T_size*m_pad)); 
+        checkCudaErrors(cudaMalloc((void **)&w_buffer, T_size*m_pad)); 
+        checkCudaErrors(cudaMalloc((void **)&v_buffer, T_size*m_pad)); 
+        checkCudaErrors(cudaMalloc((void **)&c2_buffer, T_size*m_pad)); 
+        checkCudaErrors(cudaMalloc((void **)&bNew_buffer, T_size*m_pad)); 
         checkCudaErrors(cudaMalloc((void **)&rhsUpdateArrayBuffer, T_size*m_pad)); 
         checkCudaErrors(cudaMalloc((void **)&bottomElemBuffer, T_size*(l_stride+1)*s)); 
         checkCudaErrors(cudaMalloc((void **)&topElemBuffer, T_size*(l_stride+1)*s)); 
@@ -89,7 +87,7 @@ class Datablock
         // checkCudaErrors(cudaMalloc((void **)&constRhsTop, T_size));
         checkCudaErrors(cudaMalloc((void **)&x_level_2, T_size*s*2)); 
         checkCudaErrors(cudaMalloc((void **)&w_level_2, T_size*s*2)); 
-        checkCudaErrors(cudaMalloc((void **)&v_level_2, T_size*s*2));
+        checkCudaErrors(cudaMalloc((void **)&v_level_2, T_size*s*2)); 
 
         // h_x_0   = (T *)malloc(T_size);
         // h_x_1   = (T *)malloc(T_size);
@@ -100,8 +98,8 @@ class Datablock
         
         // h_gammaLeft = (T *)malloc(T_size); 
         // h_gammaRight = (T *)malloc(T_size); 
-        // dx_2InvComplex = (T *)malloc(T_size); 
-        // dx_2InvComplex_1 = (T *)malloc(T_size); 
+        // dx_2InvNeg = (T *)malloc(T_size); 
+        // dx_2InvPos = (T *)malloc(T_size); 
         checkCudaErrors(cudaMallocHost((void **)&h_x_0, T_size));
         checkCudaErrors(cudaMallocHost((void **)&h_x_1, T_size));
         checkCudaErrors(cudaMallocHost((void **)&h_x_m_1, T_size));
@@ -110,21 +108,15 @@ class Datablock
         checkCudaErrors(cudaMallocHost((void **)&h_diagonal_m_1, T_size));
         checkCudaErrors(cudaMallocHost((void **)&h_gammaRight, T_size));
         checkCudaErrors(cudaMallocHost((void **)&h_gammaLeft, T_size));
-        checkCudaErrors(cudaMallocHost((void **)&dx_2InvComplex, T_size));
-        checkCudaErrors(cudaMallocHost((void **)&dx_2InvComplex_1, T_size));
+        checkCudaErrors(cudaMallocHost((void **)&dx_2InvNeg, T_size));
+        checkCudaErrors(cudaMallocHost((void **)&dx_2InvPos, T_size));
         checkCudaErrors(cudaMallocHost((void **)&gamma, T_size * m));
-        
         checkCudaErrors(cudaMallocPitch( (void **) &field,
-                        &pitch, 
-                        sizeof(T_REAL)*s*l_stride,
-                        steps));
-        printf("pitch = %d\n", (int)pitch);
-        fp2 = fopen("outputField", "w");
-
-        *dx_2InvComplex   = dx_2InvCmplx;
-        *dx_2InvComplex_1 = cuNeg(dx_2InvCmplx);
-        totalSteps = steps;
-        mPad = m_pad;
+                                        &pitch, 
+                                        sizeof(T_REAL)*s*l_stride,
+                                        steps));
+        *dx_2InvNeg = dx_2InvCmplx;
+        *dx_2InvPos = cuNeg(dx_2InvCmplx);
     }
 
     // Destructor which frees all the array pointers allocated
@@ -153,13 +145,15 @@ class Datablock
         // TODO: check whether all have been freed or not
         checkCudaErrors(cudaDeviceReset()); 
     }
-    void setLaunchParameters(dim3 gridData, dim3 blockData, int a, int b, int tile_marshal, int stride)
+    void setLaunchParameters(dim3 gridData, dim3 blockData, int a, int b, int tile_marshal, int stride, int steps, int m_pad)
     {
-        gridDim = gridData;
-        blockDim = blockData;
         s = a;
         b_dim = b;
         h_stride = stride;
+        mPad = m_pad;
+        totalSteps = steps;
+        gridDim = gridData;
+        blockDim = blockData;
         local_reduction_share_size  = 2*b*3*T_size;
         global_share_size           = 2*a*3*T_size;
         local_solving_share_size    = (2*b*2+2*b+2)*T_size;
