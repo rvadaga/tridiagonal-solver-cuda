@@ -43,7 +43,7 @@ beta    = k0*nref
 eta0    = 120*pi
 
 dz  = 0.55                         # in microns
-L   = 20
+L   = 100
 Nz  = int(L/dz)                    # no. of points in z-direction
 Nx  = 2048                         # no. of points to keep in x-direction
 Nskip   = 1
@@ -91,9 +91,9 @@ alphae = zeros(Nx-1)
 alphax = zeros(Nx-2)
 
 # TE coefficients
-alphaw = 1/dx**2*ones(Nx-1)                               #for p=0-N-2
-alphae = 1/dx**2*ones(Nx-1)                               #for p=1-N-1
-alphax = -4/dx**2+alphaw[1:]+alphae[:-1]                  #for p=1-N-2
+alphaw = 1/dx**2*ones(Nx-1)                               # for p=0 to N-2 : 1/(dx*dx)
+alphae = 1/dx**2*ones(Nx-1)                               # for p=1 to N-1 : 1/(dx*dx)
+alphax = -4/dx**2+alphaw[1:]+alphae[:-1]                  # for p=1 to N-2 : -2/(dx*dx)
 
 B = zeros(Nx-2, dtype='complex')
 D = zeros(Nx-2, dtype='complex')
@@ -104,8 +104,8 @@ gaml = zeros(Npts, dtype='complex')
 kxbr = zeros(Npts, dtype='complex')
 kxbl = zeros(Npts, dtype='complex')
 
-# gamr[0]=Ex[-2]/Ex[-3]
-# gaml[0]=Ex[1]/Ex[2]
+gamr[0]=Ex[-2]/Ex[-3]   # last but 2/ last but 3
+gaml[0]=Ex[1]/Ex[2]     # 2nd/ 3rd
 
 B  = -alphax + 4*1j*beta/dz - k0**2*(epsr[1:-1]-nref**2)
 b0 = B[0]
@@ -125,16 +125,16 @@ for i in range(1, Npts):
     Ex[1:-1] = c_TDMA_Solver(-alphaw[:-1], B, -alphae[1:], D)
     
     # Simple TBC    
-    # gamr[i]=Ex[-2]/Ex[-3]
-    # kxbr[i]=-1/(1j*dx)*log(gamr[i])
-    # if(real(kxbr[i])<0):
-    #     kxbr[i]=0+1j*imag(kxbr[i])
-    #     gamr[i]=exp(-1j*kxbr[i]*dx)
-    # gaml[i]=Ex[1]/Ex[2]
-    # kxbl[i]=-1/(1j*dx)*log(gaml[i])
-    # if(real(kxbl[i])<0):
-    #     kxbl[i]=0+1j*imag(kxbl[i])
-    #     gaml[i]=exp(-1j*kxbl[i]*dx)
+    gamr[i]=Ex[-2]/Ex[-3]
+    kxbr[i]=-1/(1j*dx)*log(gamr[i])
+    if(real(kxbr[i])<0):
+        kxbr[i]=0+1j*imag(kxbr[i])
+        gamr[i]=exp(-1j*kxbr[i]*dx)
+    gaml[i]=Ex[1]/Ex[2]
+    kxbl[i]=-1/(1j*dx)*log(gaml[i])
+    if(real(kxbl[i])<0):
+        kxbl[i]=0+1j*imag(kxbl[i])
+        gaml[i]=exp(-1j*kxbl[i]*dx)
         
     Ex[0]  = Ex[1]*gaml[i]
     Ex[-1] = Ex[-2]*gamr[i]
@@ -157,7 +157,7 @@ print abs(P.max())
 print 'The simulated effective index is %f' % neff_sim
 
 figure(2)
-contourf(x, linspace(0, L, Npts),((EX)))
+contourf(x, linspace(0, L, Npts),((EX)), cmap=cm.Blues)
 xlabel('$x$')
 ylabel('$z$')
 title('Contour Plot of Electric Field')

@@ -17,8 +17,10 @@
    OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 */   
  
+#include <math.h>
 #ifndef _CUSPARSE_OPS_HXX_
 #define _CUSPARSE_OPS_HXX_
+#define pi 3.1415926535897931
 
 #if !defined(__cplusplus)
 #error "This file can only by include in C++ file because it overload function names"
@@ -407,6 +409,53 @@ static __inline__ __device__ __host__  bool cuEqual( cuDoubleComplex x, cuDouble
     return( (cuCreal( x ) == cuCreal( y )) && (cuCimag( x ) == cuCimag( y )) );
 }
 
+/*---------------------------------------------------------------------------------*/
+/* Argument */
+static __inline__ __device__ __host__  float cuArg( cuComplex x )
+{
+    if(cuCrealf(x)>0 and cuCimagf(x)>0)
+        return atan(cuCimagf(x)/cuCrealf(x));
+    else if(cuCrealf(x)<0 and cuCimagf(x)>0)
+        return (pi+atan(cuCimagf(x)/cuCrealf(x)));
+    else if(cuCrealf(x)>0 and cuCimagf(x)<0)
+        return (-pi/2-atan(cuCrealf(x)/cuCimagf(x)));
+    else
+        return (-pi+atan(cuCimagf(x)/cuCrealf(x)));
+}
+
+static __inline__ __device__ __host__  double cuArg( cuDoubleComplex x )
+{
+    if(cuCreal(x)>0 and cuCimag(x)>0)
+        return atan(cuCimag(x)/cuCreal(x));
+    else if(cuCreal(x)<0 and cuCimag(x)>0)
+        return (pi+atan(cuCimag(x)/cuCreal(x)));
+    else if(cuCreal(x)>0 and cuCimag(x)<0)
+        return (-pi/2-atan(cuCreal(x)/cuCimag(x)));
+    else
+        return (-pi+atan(cuCimag(x)/cuCreal(x)));
+}
+/*---------------------------------------------------------------------------------*/
+/* Logarithm */
+static __inline__ __device__ __host__  cuComplex cuLog( cuComplex x )
+{
+    return (cuGet<cuComplex>(log(cuAbs(x)), cuArg(x)));
+}
+
+static __inline__ __device__ __host__  cuDoubleComplex cuLog( cuDoubleComplex x )
+{
+    return (cuGet<cuDoubleComplex>(log(cuAbs(x)), cuArg(x)));
+}
+/*---------------------------------------------------------------------------------*/
+/* Exponential */
+static __inline__ __device__ __host__  cuComplex cuExp( cuComplex x )
+{
+    return (cuGet<cuComplex>(exp(-cuImag(x))*cosf(cuReal(x)), exp(-cuImag(x))*sinf(cuReal(x))));
+}
+
+static __inline__ __device__ __host__  cuDoubleComplex cuExp( cuDoubleComplex x )
+{
+    return (cuGet<cuDoubleComplex>(exp(-cuImag(x))*cos(cuReal(x)), exp(-cuImag(x))*sin(cuReal(x))));
+}
 
 /*----------------------------------------------------------------------------------*/
 /* Flops */

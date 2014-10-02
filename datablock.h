@@ -53,8 +53,11 @@ class Datablock
     T_REAL *field;
     T *h_gammaLeft;
     T *h_gammaRight;
+    T *h_kxbLeft;
+    T *h_kxbRight;
     T *dx_2InvNeg;  // -1/(dx*dx)
     T *dx_2InvPos;// 1/(dx*dx)
+    T_REAL *dx;
 
     T *h_x_0;       // 0th element of x in Ax = B 
     T *h_x_1;       // 1st element of x in Ax = B 
@@ -62,7 +65,7 @@ class Datablock
     T *h_x_m_1;     // (m-1) element of x in Ax = B
     T *h_diagonal_0;       // 0 th element of main diagonal in Ax = B
     T *h_diagonal_m_1;     // (m-1) element of main diagonal in Ax = B
-    Datablock(int m, int m_pad, int s, int steps, T dx_2InvCmplx, int l_stride)
+    Datablock(int m, int m_pad, int s, int steps, T dx_2InvCmplx, int l_stride, T_REAL deltax)
     {
         T_size = sizeof(T);
         checkCudaErrors(cudaMalloc((void **)&flag, sizeof(bool)*m_pad)); 
@@ -89,17 +92,21 @@ class Datablock
         checkCudaErrors(cudaMalloc((void **)&w_level_2, T_size*s*2)); 
         checkCudaErrors(cudaMalloc((void **)&v_level_2, T_size*s*2)); 
 
-        // h_x_0   = (T *)malloc(T_size);
-        // h_x_1   = (T *)malloc(T_size);
-        // h_x_m_2 = (T *)malloc(T_size); 
-        // h_x_m_1 = (T *)malloc(T_size); 
-        // h_diagonal_0 = (T *)malloc(T_size); 
-        // h_diagonal_m_1 = (T *)malloc(T_size); 
+        h_x_0   = (T *)malloc(T_size);
+        h_x_1   = (T *)malloc(T_size);
+        h_x_m_2 = (T *)malloc(T_size); 
+        h_x_m_1 = (T *)malloc(T_size); 
+        h_diagonal_0 = (T *)malloc(T_size); 
+        h_diagonal_m_1 = (T *)malloc(T_size); 
         
-        // h_gammaLeft = (T *)malloc(T_size); 
-        // h_gammaRight = (T *)malloc(T_size); 
-        // dx_2InvNeg = (T *)malloc(T_size); 
-        // dx_2InvPos = (T *)malloc(T_size); 
+        dx = (T_REAL *)malloc(sizeof(T_REAL)); 
+        h_gammaLeft = (T *)malloc(T_size); 
+        h_gammaRight = (T *)malloc(T_size); 
+        h_kxbLeft = (T *)malloc(T_size); 
+        h_kxbRight = (T *)malloc(T_size); 
+        dx_2InvNeg = (T *)malloc(T_size); 
+        dx_2InvPos = (T *)malloc(T_size);
+
         checkCudaErrors(cudaMallocHost((void **)&h_x_0, T_size));
         checkCudaErrors(cudaMallocHost((void **)&h_x_1, T_size));
         checkCudaErrors(cudaMallocHost((void **)&h_x_m_1, T_size));
@@ -117,6 +124,7 @@ class Datablock
                                         steps));
         *dx_2InvNeg = dx_2InvCmplx;
         *dx_2InvPos = cuNeg(dx_2InvCmplx);
+        *dx = deltax;
     }
 
     // Destructor which frees all the array pointers allocated

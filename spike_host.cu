@@ -24,6 +24,7 @@ THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLI
 #include "datablock.h"
 #include "spike_kernel.hxx"
 #include "cusparse_ops.hxx"
+#include <complex.h>
 
 //template <typename T>
 void setConstants(cuDoubleComplex *dx_2InvNeg)
@@ -37,9 +38,9 @@ template <typename T, typename T_REAL>
 void tridiagonalSolver(Datablock<T, T_REAL> *data, const T* dl, T* d, const T* du, T* b, T* bNew, T* rhsUpdateArray, const int m)
 {
     // prefer larger L1 cache and smaller shared memory
-    cudaFuncSetCacheConfig(tiled_diag_pivot_x1<T,T_REAL>,cudaFuncCachePreferL1);
-    cudaFuncSetCacheConfig(spike_GPU_back_sub_x1<T, T_REAL>,cudaFuncCachePreferL1);
-    cudaFuncSetCacheConfig(multiply_kernel<T>,cudaFuncCachePreferL1);
+    cudaFuncSetCacheConfig(tiled_diag_pivot_x1<T,T_REAL>, cudaFuncCachePreferL1);
+    cudaFuncSetCacheConfig(spike_GPU_back_sub_x1<T, T_REAL>, cudaFuncCachePreferL1);
+    cudaFuncSetCacheConfig(multiply_kernel<T>, cudaFuncCachePreferL1);
     
     T* dl_buffer    = data->dl_buffer;    // lower digonal after DM
     T* d_buffer     = data->d_buffer;     // diagonal after DM
@@ -50,17 +51,19 @@ void tridiagonalSolver(Datablock<T, T_REAL> *data, const T* dl, T* d, const T* d
     T* c2_buffer    = data->c2_buffer;    // stores modified diagonal elements in diagonal pivoting method
     T* bNew_buffer  = data->bNew_buffer;  // new DM B array after multiplying with updated A (here, B is in Ax = B) 
     T* rhsUpdateArrayBuffer  = data->rhsUpdateArrayBuffer;  // DM RHS update array
-    T* bottomElemBuffer      = data->bottomElemBuffer;      
-    T* topElemBuffer         = data->topElemBuffer;
-    int step = data->step;
-    T_REAL* field = data->field;
-    size_t pitch = data->pitch;
+    T* bottomElemBuffer      = data->bottomElemBuffer;      // elements needed for finding new rhs' bottom elems
+    T* topElemBuffer         = data->topElemBuffer;         // elements needed for finding new rhs' top elems
+    
     T* x_level_2 = data->x_level_2;
     T* w_level_2 = data->w_level_2;
     T* v_level_2 = data->v_level_2;
+    
+    int step = data->step;
+    T_REAL* field = data->field;
+    size_t pitch = data->pitch;
 
-    int local_reduction_share_size  = data->local_reduction_share_size;     
-    int global_share_size           = data->global_share_size;      
+    int local_reduction_share_size  = data->local_reduction_share_size;
+    int global_share_size           = data->global_share_size;
     int local_solving_share_size    = data->local_solving_share_size;
     int marshaling_share_size       = data->marshaling_share_size;
 
@@ -72,29 +75,26 @@ void tridiagonalSolver(Datablock<T, T_REAL> *data, const T* dl, T* d, const T* d
     int stride  = data->h_stride;
     int tile    = 128;
 
-    // T_REAL *field;
-    // T_REAL *h_field;
-    // checkCudaErrors(cudaMalloc((void **)&field, sizeof(T_REAL)*s*b_dim));
-    // checkCudaErrors(cudaMallocHost((void **)&h_field, sizeof(T_REAL)*s*b_dim));
-
-    // int marshaledIndex_1    = data->marshaledIndex_1;
-    // int marshaledIndex_m_2  = data->marshaledIndex_m_2;
+    int marshaledIndex_1    = data->marshaledIndex_1;
+    int marshaledIndex_m_2  = data->marshaledIndex_m_2;
     int marshaledIndex_m_1  = data->marshaledIndex_m_1;
 
-    // T *h_x_0    = data->h_x_0;
-    // T *h_x_1    = data->h_x_1;
-    // T *h_x_m_2  = data->h_x_m_2;
-    // T *h_x_m_1  = data->h_x_m_1;
+    T_REAL dx = *(data->dx);
+    T *h_x_0    = data->h_x_0;
+    T *h_x_1    = data->h_x_1;
+    T *h_x_m_2  = data->h_x_m_2;
+    T *h_x_m_1  = data->h_x_m_1;
     T *h_diagonal_m_1   = data->h_diagonal_m_1;
     T *h_diagonal_0     = data->h_diagonal_0;
 
     T* h_gammaLeft      = data->h_gammaLeft;
+    T* h_kxbLeft        = data->h_kxbLeft;
     T* h_gammaRight     = data->h_gammaRight;
-    T* dx_2InvNeg   = data->dx_2InvNeg;     // equals -1/(dx*dx)
-    T* dx_2InvPos = data->dx_2InvPos;   // equals +1/(dx*dx)
+    T* h_kxbRight       = data->h_kxbRight;
+    T* dx_2InvNeg       = data->dx_2InvNeg;   // equals -1/(dx*dx)
+    T* dx_2InvPos       = data->dx_2InvPos;   // equals +1/(dx*dx)
     checkCudaErrors(cudaMemset(bNew_buffer, 0, sizeof(T)*s*b_dim*stride));
 
-    // kernels 
     // data layout transformation
     if(data->step == 0){
         forward_marshaling_bxb<T><<<gridDim, blockDim, marshaling_share_size>>>(dl_buffer, dl, stride, b_dim, m, cuGet<T>(0));
@@ -112,27 +112,28 @@ void tridiagonalSolver(Datablock<T, T_REAL> *data, const T* dl, T* d, const T* d
     spike_GPU_global_solving_x1<<<1, 32, global_share_size>>>(x_level_2, w_level_2, v_level_2, s);
     spike_GPU_local_solving_x1<T><<<s, b_dim, local_solving_share_size>>>(b_buffer, w_buffer, v_buffer, x_level_2, stride);
     spike_GPU_back_sub_x1<T, T_REAL><<<s, b_dim>>>(b_buffer, w_buffer, v_buffer, x_level_2, stride, field + step*pitch/sizeof(T_REAL));
-    // checkCudaErrors(cudaMemcpy(h_field, field, sizeof(T_REAL)*s*b_dim, cudaMemcpyDeviceToHost));
-    // FILE *fp2 = data->fp2;
-    // for(int i=0; i<s*b_dim; i++){
-    //     fprintf(fp2, "%E\t", *(h_field + i));
-    // }
-    // fprintf(fp2, "\n");
-
     // Solution to Ax = B is in b_buffer. It is data marshaled here.
-    // checkCudaErrors(cudaMemcpy(h_x_0,   b_buffer,                    sizeof(T), cudaMemcpyDeviceToHost));
-    // checkCudaErrors(cudaMemcpy(h_x_1,   b_buffer+marshaledIndex_1,   sizeof(T), cudaMemcpyDeviceToHost));
-    // checkCudaErrors(cudaMemcpy(h_x_m_2, b_buffer+marshaledIndex_m_2, sizeof(T), cudaMemcpyDeviceToHost));
-    // checkCudaErrors(cudaMemcpy(h_x_m_1, b_buffer+marshaledIndex_m_1, sizeof(T), cudaMemcpyDeviceToHost));
-    // printf("h_x_0   = %E.\n", cuAbs(*h_x_0));
-    // printf("h_x_1   = %E.\n", cuAbs(*h_x_1));
-    // printf("h_x_m_2 = %E.\n", cuAbs(*h_x_m_2));
-    // printf("h_x_m_1 = %E.\n", cuAbs(*h_x_m_1));
-    // *h_gammaLeft     = cuDiv(*h_x_0, *h_x_1);
-    // *h_gammaRight    = cuDiv(*h_x_m_1, *h_x_m_2);
     
-    *h_gammaLeft     = cuGet<T>((T_REAL)0.0, (T_REAL)0.0);
-    *h_gammaRight    = cuGet<T>((T_REAL)0.0, (T_REAL)0.0);
+    checkCudaErrors(cudaMemcpy(h_x_0,   b_buffer,                    sizeof(T), cudaMemcpyDeviceToHost));
+    checkCudaErrors(cudaMemcpy(h_x_1,   b_buffer+marshaledIndex_1,   sizeof(T), cudaMemcpyDeviceToHost));
+    checkCudaErrors(cudaMemcpy(h_x_m_2, b_buffer+marshaledIndex_m_2, sizeof(T), cudaMemcpyDeviceToHost));
+    checkCudaErrors(cudaMemcpy(h_x_m_1, b_buffer+marshaledIndex_m_1, sizeof(T), cudaMemcpyDeviceToHost));
+
+    *h_gammaLeft     = cuDiv(*h_x_0, *h_x_1);
+    *h_gammaRight    = cuDiv(*h_x_m_1, *h_x_m_2);
+    
+    *h_kxbLeft = cuDiv(cuMul(cuLog(*h_gammaLeft), cuGet<T>((T_REAL)0.0, (T_REAL)1.0)), cuGet<T>(dx, (T_REAL)0.0));
+    if(cuReal(*h_kxbLeft) < 0){
+        *h_kxbLeft = cuGet<T>((T_REAL)0.0, cuImag(*h_kxbLeft));
+        *h_gammaLeft = cuExp(cuMul(cuGet<T>((T_REAL)0.0, -dx), *h_kxbLeft));
+    }
+    
+    *h_kxbRight = cuDiv(cuMul(cuLog(*h_gammaRight), cuGet<T>((T_REAL)0.0, (T_REAL)1.0)), cuGet<T>(dx, (T_REAL)0.0));
+    if(cuReal(*h_kxbRight) < 0){
+        *h_kxbRight = cuGet<T>((T_REAL)0.0, cuImag(*h_kxbRight));
+        *h_gammaRight = cuExp(cuMul(cuGet<T>((T_REAL)0.0, -dx), *h_kxbRight));
+    }
+
     *h_diagonal_0    = cuFma(*h_gammaLeft, *dx_2InvPos, *(data->constRhsTop));
     *h_diagonal_m_1  = cuFma(*h_gammaRight, *dx_2InvPos, *(data->constRhsBot));
 
@@ -154,9 +155,6 @@ void tridiagonalSolver(Datablock<T, T_REAL> *data, const T* dl, T* d, const T* d
         checkCudaErrors(cudaMemcpy(bottomElemBuffer + i*b_dim, b_buffer + i*blockSize, sizeof(T)*b_dim, cudaMemcpyDeviceToDevice));
 
     checkCudaErrors(cudaMemset(bottomElemBuffer + s*(b_dim), 0, sizeof(T)));
-    // if(m%b_dim != 0 && m%(b_dim*stride) != 0)
-        // checkCudaErrors(cudaMemset(bottomElemBuffer + s*(b_dim), 0, sizeof(T)));
-
 
     // finds new RHS with rhsUpdateArrayBuffer having its 1st and last elements modified
     multiply_kernel<T><<<s, b_dim>>>(rhsUpdateArrayBuffer, topElemBuffer, bottomElemBuffer+1, b_buffer, bNew_buffer, stride, tile);
@@ -180,25 +178,26 @@ void tridiagonalSolver(Datablock<T, T_REAL> *data, const T* dl, T* d, const T* d
         checkCudaErrors(cudaMemcpy(d_buffer+marshaledIndex_m_1, h_diagonal_m_1, sizeof(T), cudaMemcpyHostToDevice));
     }
     
-    // checkCudaErrors(cudaFree(field));
-    // checkCudaErrors(cudaFreeHost(h_field));
-    // free(fp2);
     // cudaMemcpy(h_gammaLeft, d_gamma)
     // printf("Solving done.\n\n");
     // free pivotingData both h and dev
     // use checkCudaErrors for all cudaMallocs
+    // change all *h_x to h_x
 }
 
 template <typename T, typename T_REAL> 
 void tridiagonalSolverHost(Datablock<T, T_REAL> *data, const T* dl, T* d, const T* du, T* b, T* bNew, T* rhsUpdateArray, T* x, const int m)
 {
-    T* h_gammaLeft      = data->h_gammaLeft;
-    T* h_gammaRight     = data->h_gammaRight;
-    T* dx_2InvNeg   = data->dx_2InvNeg;     // equals -1/(dx*dx)
-    T* dx_2InvPos = data->dx_2InvPos;   // equals +1/(dx*dx)
-    T *gamma = data->gamma;
-    T *h_diagonal_m_1  = data->h_diagonal_m_1;
-    T *h_diagonal_0  = data->h_diagonal_0;
+    T* h_gammaLeft  = data->h_gammaLeft;
+    T* h_gammaRight = data->h_gammaRight;
+    T* h_kxbLeft    = data->h_kxbLeft;
+    T* h_kxbRight   = data->h_kxbRight;
+    T* dx_2InvNeg   = data->dx_2InvNeg;
+    T* dx_2InvPos   = data->dx_2InvPos;
+    T_REAL dx = *(data->dx);
+    T *gamma  = data->gamma;
+    T *h_diagonal_m_1   = data->h_diagonal_m_1;
+    T *h_diagonal_0     = data->h_diagonal_0;
     T  beta = d[0];
     x[0] = cuDiv(b[0], beta);
     int i;
@@ -214,17 +213,29 @@ void tridiagonalSolverHost(Datablock<T, T_REAL> *data, const T* dl, T* d, const 
         x[k-1] = cuFma(cuNeg(x[k]), gamma[k], x[k-1]);
     }
 
-    *h_gammaLeft     = cuGet<T>((T_REAL)0.0, (T_REAL)0.0);
-    *h_gammaRight    = cuGet<T>((T_REAL)0.0, (T_REAL)0.0);
+    *h_gammaLeft     = cuDiv(x[0], x[1]);
+    *h_gammaRight    = cuDiv(x[m-1], x[m-2]);
+    
+    *h_kxbLeft = cuDiv(cuMul(cuLog(*h_gammaLeft), cuGet<T>((T_REAL)0.0, (T_REAL)1.0)), cuGet<T>(dx, (T_REAL)0.0));
+    if(cuReal(*h_kxbLeft) < 0){
+        *h_kxbLeft = cuGet<T>((T_REAL)0.0, cuImag(*h_kxbLeft));
+        *h_gammaLeft = cuExp(cuMul(cuGet<T>((T_REAL)0.0, -dx), *h_kxbLeft));
+    }
+    
+    *h_kxbRight = cuDiv(cuMul(cuLog(*h_gammaRight), cuGet<T>((T_REAL)0.0, (T_REAL)1.0)), cuGet<T>(dx, (T_REAL)0.0));
+    if(cuReal(*h_kxbRight) < 0){
+        *h_kxbRight = cuGet<T>((T_REAL)0.0, cuImag(*h_kxbRight));
+        *h_gammaRight = cuExp(cuMul(cuGet<T>((T_REAL)0.0, -dx), *h_kxbRight));
+    }
+    
     *h_diagonal_0    = cuFma(*h_gammaLeft, *dx_2InvPos, *(data->constRhsTop));
     *h_diagonal_m_1  = cuFma(*h_gammaRight, *dx_2InvPos, *(data->constRhsBot));
     rhsUpdateArray[0] = *h_diagonal_0;
     rhsUpdateArray[m-1] = *h_diagonal_m_1;
-
-    bNew[0] = cuAdd(cuMul(rhsUpdateArray[0], x[0]), cuMul(*dx_2InvPos, x[1]));
+    
+    bNew[0]   = cuAdd(cuMul(rhsUpdateArray[0], x[0]), cuMul(*dx_2InvPos, x[1]));
     bNew[m-1] = cuAdd(cuMul(*dx_2InvPos, x[m-2]), cuMul(rhsUpdateArray[m-1], x[m-1]));
     for (i=1; i<m-1; i++){
-        // bNew[i] = dx_2InvPos*x[i-1] + rhsUpdateArray[i]*x[i] + dx_2InvPos*x[i+1];
         bNew[i] = cuMul(*dx_2InvPos, x[i-1]);
         bNew[i] = cuFma(rhsUpdateArray[i], x[i], bNew[i]);
         bNew[i] = cuFma(*dx_2InvPos, x[i+1], bNew[i]);
@@ -232,7 +243,7 @@ void tridiagonalSolverHost(Datablock<T, T_REAL> *data, const T* dl, T* d, const 
 
     if (data->step != (data->totalSteps-1)){
         d[0] = cuFma(*h_gammaLeft, *dx_2InvNeg, *(data->constLhsTop));
-        d[m-1] = cuFma(*h_gammaLeft, *dx_2InvNeg, *(data->constLhsBot));
+        d[m-1] = cuFma(*h_gammaRight, *dx_2InvNeg, *(data->constLhsBot));
         memcpy(b, bNew, sizeof(T)*m);
     }
 }

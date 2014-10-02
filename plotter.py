@@ -1,8 +1,8 @@
 # #setting our fonts
-# from matplotlib import rc
-# rc('font', **{'family':'serif', 'size':'14', 'serif':'serif'})
-# rc('axes', **{'grid':'False', 'titlesize':'16', 'labelsize':'16'})
-# rc('text', usetex=True)
+from matplotlib import rc
+rc('font', **{'family':'serif', 'size':'14', 'serif':'serif'})
+rc('axes', **{'grid':'False', 'titlesize':'16', 'labelsize':'16'})
+rc('text', usetex=True)
 
 from matplotlib.pylab import *
 close('all')
@@ -30,7 +30,8 @@ legend(('Source Electric Field', 'Final Electric Field'))
 L = 20
 
 figure(1)
-contourf(linspace(0, 40, index), linspace(0, L, steps), ((E)), cmap='Blues')
+# contourf(linspace(0, 40, index), linspace(0, L, steps), ((E)))
+contourf(linspace(0, 40, index), linspace(0, L, steps), ((E)), cmap=cm.Blues)
 xlabel('$x$')
 ylabel('$z$')
 title('Contour Plot of Electric Field')

@@ -144,78 +144,11 @@ void tridiagonalSolver(Datablock<T, T_REAL> *data, const T* dl, T* d, const T* d
 template <typename T, typename T_REAL> 
 void tridiagonalSolverHost(Datablock<T, T_REAL> *data, const T* dl, T* d, const T* du, T* b, T *bNew, T *rhsUpdateArray, T* x, const int m);
 
-
 //template<typename T>
 void setConstants(cuDoubleComplex *dx_2InvNeg);
 
 //utility
 #define EPS 1e-20
-
-// mv_test fnxn takes tridiagonal matrix A (with diagonals a, b, c) and multiplies it with x (d) to give B (x)  
-template <typename T> 
-void mv_test
-(
-    T* x,               // result B
-    const T* a,         // lower diagonal
-    const T* b,         // diagonal
-    const T* c,         // upper diagonal
-    const T* d,         // variable vector
-    const int len       // length of the matrix
-)
-{
-    printf("Multiplying A with result x to get B ...\n");
-    int m=len;
-    x[0] =  cuAdd(  cuMul(b[0],d[0]), 
-                        cuMul(c[0],d[1]));
-    // does the multiplication of the first row
-    
-    // multiplication of rows 1 to m-1
-    for(int i=1; i<m-1; i++)
-    {   
-        //x[i]=  a[i]*d[i-1]+b[i]*d[i]+c[i]*d[i+1];
-        x[i]=  cuMul(a[i], d[i-1]);
-        x[i]=  cuFma(b[i], d[i], x[i]);
-        // cuFma first multiplies 1st 2 params and then adds 3rd one  
-        x[i]=  cuFma(c[i], d[i+1], x[i]);
-    }
-        
-    // multiplication of last row m
-    x[m-1]= cuAdd(cuMul(a[m-1],d[m-2]) , cuMul(b[m-1],d[m-1]) );
-    printf("Multiplication done.\n\n");
-}
-
-// mv_test fnxn takes tridiagonal matrix A (with diagonals a, b, c) and multiplies it with x (d) to give B (x)  
-template <typename T> 
-void mv_test_update
-(
-    T* x,               // result B
-    T dx_2InvNeg,         // lower diagonal
-    const T* b,         // diagonal
-    const T* d,         // variable vector
-    const int len       // length of the matrix
-)
-{
-    printf("Multiplying updated A with result x to get new B ...\n");
-    int m = len;
-    x[0] =  cuAdd(cuMul(b[0], d[0]), 
-                        cuMul(dx_2InvNeg, d[1]));
-    // does the multiplication of the first row
-    
-    // multiplication of rows 1 to m-1
-    for(int i=1; i<m-1; i++)
-    {   
-        //x[i]=  a[i]*d[i-1]+b[i]*d[i]+c[i]*d[i+1];
-        x[i]=  cuMul(dx_2InvNeg, d[i-1]);
-        x[i]=  cuFma(b[i], d[i], x[i]);
-        // cuFma first multiplies 1st 2 params and then adds 3rd one  
-        x[i]=  cuFma(dx_2InvNeg, d[i+1], x[i]);
-    }
-        
-    // multiplication of last row m
-    x[m-1]= cuAdd(cuMul(dx_2InvNeg, d[m-2]), cuMul(b[m-1], d[m-1]) );
-    printf("Multiplication done.\n\n");
-}
-
 
 // compare_result<T, T_REAL>(h_b, h_b_back, 1, m, 1, 1e-10, 1e-10, 50, 3, b_dim);
 template <typename T, typename T_REAL> 
@@ -230,7 +163,6 @@ void compare_result
     const int tx
 )
 {
-    printf("Comparing computed B with given B.\n");
     T_REAL err = 0.0;
     T_REAL sum_err = 0.0;
     T_REAL total_sum = 0.0;
@@ -239,8 +171,7 @@ void compare_result
     int p = 0; //error counter
     int t = 0; //check counter
     
-    for(int i=0;i<len;i++)
-    {
+    for(int i=0;i<len;i++){
         T diff = cuSub(x[i], y[i]);
         err = cuReal(cuMul(diff, cuConj(diff) ));
         sum_err +=err;
@@ -249,18 +180,15 @@ void compare_result
         
         //avoid overflow in error check
         r_err = x_2 > EPS ? err/x_2:0.0;
-        if(err > abs_err || r_err > re_err)
-        {
-            if(p < p_bound)
-            {
+        if(err > abs_err || r_err > re_err){
+            if(p < p_bound){
                 printf("Error occurred at element %2d, cpu = %E and gpu = %E at %d\n", i, cuReal(x[i]), cuReal(y[i]), i%tx);
                 printf("Its absolute error is %le and relative error is %le.\n", err, r_err);
             }
             p++;
         }
         
-        if(t < 16)
-        {
+        if(t < 1){
             printf("Checked element %2d, cpu = %E and gpu = %E\n", i, cuReal(x[i]), cuReal(y[i]));
             t++;
         }
@@ -277,8 +205,7 @@ void compare_result
 
 // This is a testing gtsv function
 template <typename T, typename T_REAL> 
-void gtsv_randomMatrix(int m, int steps)
-{
+void gtsv_randomMatrix(int m, int steps){
     // each array is a set of elements in a diagonal stored in contiguous mem locations.
     // input host arrays
     T *h_dl;                // lower diagonal elements of mat A (m-1 elements)
@@ -333,7 +260,7 @@ void gtsv_randomMatrix(int m, int steps)
 
     // finds appropriate gridSize for data marshaling (will be referred to as DM from now on)
     findBestGrid<T>(m, tile_marshal, &m_pad, &b_dim, &s, &stride);
-    Datablock<T, T_REAL> data(m, m_pad, s, steps, dx_2InvNeg, b_dim);
+    Datablock<T, T_REAL> data(m, m_pad, s, steps, dx_2InvNeg, b_dim, dx);
 
     FILE *fp1   = fopen("configFile", "w");
     fprintf(fp1, "%d\n", m);
@@ -363,8 +290,7 @@ void gtsv_randomMatrix(int m, int steps)
     checkCudaErrors(cudaMallocHost((void **) &field, sizeof(T_REAL) * s * b_dim * steps));
 
     // setting refractive index profile, distance and initial source conditions
-    for(int i=0; i<m+2; i++)
-    {
+    for(int i=0; i<m+2; i++){
         h_x[i]  = -20 + i*dx;
         if(h_x[i] > -halfWidth && h_x[i] < halfWidth)
             h_n[i] = nCore;
@@ -387,10 +313,10 @@ void gtsv_randomMatrix(int m, int steps)
     checkCudaErrors(cudaMemset(du, 0, m * T_size));
     checkCudaErrors(cudaMemset(b,  0, m * T_size));
     
-    // T gammaLeft     = cuDiv(h_Ex[1], h_Ex[2]);
-    // T gammaRight    = cuDiv(h_Ex[m], h_Ex[m-1]);
-    T gammaLeft     = cuGet<T>((T_REAL)0.0, (T_REAL)0.0);
-    T gammaRight    = cuGet<T>((T_REAL)0.0, (T_REAL)0.0);
+    T gammaLeft     = cuDiv(h_Ex[1], h_Ex[2]);
+    T gammaRight    = cuDiv(h_Ex[m], h_Ex[m-1]);
+    // T gammaLeft     = cuGet<T>((T_REAL)0.0, (T_REAL)0.0);
+    // T gammaRight    = cuGet<T>((T_REAL)0.0, (T_REAL)0.0);
     T constLhsTop   = cuGet<T>(2*dx_2Inv - k0_2*(pow(h_n[1], 2) - pow(nRef, 2)), 4*beta*dzInv);
     T constLhsBot   = cuGet<T>(2*dx_2Inv - k0_2*(pow(h_n[m], 2) - pow(nRef, 2)), 4*beta*dzInv);
     T constRhsTop   = cuGet<T>(-2*dx_2Inv + k0_2*(pow(h_n[1], 2) - pow(nRef, 2)), 4*beta*dzInv);
@@ -426,8 +352,7 @@ void gtsv_randomMatrix(int m, int steps)
     h_b[m-1] = cuFma(dx_2InvNeg, h_Ex[m-2], h_b[m-1]);
 
     // setting interior elements
-    for(int k=1; k<m-1; k++)
-    {
+    for(int k=1; k<m-1; k++){
         h_dl[k] = dx_2InvNeg;
         h_du[k] = dx_2InvNeg;
         h_d[k]  = cuGet<T>(2*dx_2Inv - k0_2*(pow(h_n[k+1], 2) - pow(nRef, 2)), 4*beta*dzInv);
@@ -449,7 +374,7 @@ void gtsv_randomMatrix(int m, int steps)
     setConstants(&dx_2InvPos);
 
     // finding 'marshaled' index of 1st, m-2 th, m-1 th element
-    // 0 th elem remains in the same position
+    // 0th elem remains in the same position
     int marshaledIndex_1;
     int marshaledIndex_m_2;
     int marshaledIndex_m_1;
@@ -458,18 +383,17 @@ void gtsv_randomMatrix(int m, int steps)
     marshaledIndex_m_1 = find_marshaled_index<T, T_REAL>(&data, m-1);
     data.setMarshaledIndex(marshaledIndex_1, marshaledIndex_m_2, marshaledIndex_m_1);
 
-    // solving the matrix
+    // solving the matrix on device
     double start, stop;
     start = get_second();
-    for(int i=0; i<steps; i++)
-    {
+    for(int i=0; i<steps; i++){
         data.step = i;
         tridiagonalSolver<T, T_REAL>(&data, dl, d, du, b, bNew, rhsUpdateArray, m);
         cudaDeviceSynchronize();
         cudaGetLastError();
     }
     stop = get_second();
-    printf("time on gpu = %.6f s\n", stop-start);
+    printf("\ntime on gpu = %.6f s\n", stop-start);
     checkCudaErrors(cudaMemcpy2D(   field, 
                                     sizeof(T_REAL)*s*b_dim, 
                                     data.field, 
@@ -491,28 +415,66 @@ void gtsv_randomMatrix(int m, int steps)
     checkCudaErrors(cudaMemcpy(h_x_gpu, b, m*T_size, cudaMemcpyDeviceToHost));
     checkCudaErrors(cudaMemcpy(h_bNew_gpu, bNew, m*T_size, cudaMemcpyDeviceToHost));
     
+    // solving the matrix on CPU
+    gammaLeft     = cuDiv(h_Ex[1], h_Ex[2]);
+    gammaRight    = cuDiv(h_Ex[m], h_Ex[m-1]);
+    // gammaLeft     = cuGet<T>((T_REAL)0.0, (T_REAL)0.0);
+    // gammaRight    = cuGet<T>((T_REAL)0.0, (T_REAL)0.0);
+
+    // setting first elements
+    // first element in sub-diagonal is equal to 0 
+    h_dl[0]   = cuGet<T>((T_REAL)0.0, (T_REAL)0.0); 
+    h_d[0]    = cuFma(dx_2InvNeg, gammaLeft, constLhsTop);
+    h_rhsUpdateArray[0] = constRhsTop;
+    h_du[0]   = dx_2InvNeg;
+
+    // setting last elements
+    h_dl[m-1] = dx_2InvNeg;
+    h_d[m-1]  = cuFma(dx_2InvNeg, gammaRight, constLhsBot);
+    h_rhsUpdateArray[m-1] = constRhsBot;
+    h_du[m-1] = cuGet<T>((T_REAL)0.0, (T_REAL)0.0);
+    // last element in super diagonal is equal to 0
+    
+    // By following this convention, we can access elements of dl, du, d present in the same row by the row's index.
+
+    h_b[0] = cuMul(cuFma(gammaLeft, dx_2InvNeg, constRhsTop), h_Ex[1]);
+    h_b[0] = cuFma(dx_2InvNeg, h_Ex[2], h_b[0]);
+    h_b[m-1] = cuMul(cuFma(gammaRight, dx_2InvNeg, constRhsTop), h_Ex[m-1]);
+    h_b[m-1] = cuFma(dx_2InvNeg, h_Ex[m-2], h_b[m-1]);
+
     start = get_second();
-    for(int i=0; i<steps; i++)
-    {
+    for(int i=0; i<steps; i++){
         data.step = i;
         tridiagonalSolverHost<T, T_REAL>(&data, h_dl, h_d, h_du, h_b, h_bNew, h_rhsUpdateArray, h_field, m);
     }
     stop = get_second();
-    printf("time on cpu = %.6f s\n", stop-start);
+    printf("time on cpu = %.6f s\n\n", stop-start);
 
+    // compare cpu and gpu results
+    printf("Comparing final field of gpu and cpu.\n");
     compare_result<T, T_REAL>(h_field, h_x_gpu, m, 1e-10, 1e-10, 50, stride);
+    printf("Comparing updated rhs of gpu and cpu.\n");
     compare_result<T, T_REAL>(h_bNew, h_bNew_gpu, m, 1e-10, 1e-10, 50, stride);
     
+    checkCudaErrors(cudaFreeHost(h_dl));
     checkCudaErrors(cudaFreeHost(h_d));
+    checkCudaErrors(cudaFreeHost(h_du));
     checkCudaErrors(cudaFreeHost(h_b));
     checkCudaErrors(cudaFreeHost(h_n));
     checkCudaErrors(cudaFreeHost(h_x));
-    checkCudaErrors(cudaFreeHost(h_dl));
-    checkCudaErrors(cudaFreeHost(h_du));
     checkCudaErrors(cudaFreeHost(h_Ex));
+    checkCudaErrors(cudaFreeHost(h_bNew));
+    checkCudaErrors(cudaFreeHost(h_field));
+    checkCudaErrors(cudaFreeHost(field));
     checkCudaErrors(cudaFreeHost(h_x_gpu));
     checkCudaErrors(cudaFreeHost(h_bNew_gpu));
     checkCudaErrors(cudaFreeHost(h_rhsUpdateArray));
+    checkCudaErrors(cudaFree(dl));
+    checkCudaErrors(cudaFree(d));
+    checkCudaErrors(cudaFree(du));
+    checkCudaErrors(cudaFree(b));
+    checkCudaErrors(cudaFree(bNew));
+    checkCudaErrors(cudaFree(rhsUpdateArray));
     // TODO: don't forget to free memory
     // no need to find best grid every time, create buffers, just replace them and free them in this function.
     // use cudaMallocHost for everything --> pinned mem
@@ -520,19 +482,17 @@ void gtsv_randomMatrix(int m, int steps)
 }
 
 void
-showHelp()
-{
+showHelp(){
     printf("\nTridiagonal Solver : Command line options\n");
     printf("\t-device=n          (where n=0,1,2.... for the GPU device)\n\n");
     printf("> The default matrix size can be overridden with these parameters\n");
-    printf("\t-size=row_dim_size (matrix row    dimensions)\n");
+    printf("\t-size=row_dim_size (matrix row dimensions)\n");
 }
 
 int 
 main(int argc, char **argv)
 {
-    if (checkCmdLineFlag(argc, (const char **)argv, "help"))
-    {
+    if (checkCmdLineFlag(argc, (const char **)argv, "help")){
         showHelp();
         return 0;
     }
@@ -551,19 +511,14 @@ main(int argc, char **argv)
     printf("> Device %d: \"%s\"\n", devID, deviceProp.name);
     printf("> SM Capability %d.%d detected.\n", deviceProp.major, deviceProp.minor);
     
-    if (checkCmdLineFlag(argc, (const char **)argv, "size"))
-    {
+    if (checkCmdLineFlag(argc, (const char **)argv, "size")){
         m = getCmdLineArgumentInt(argc, (const char **)argv, "size=");
-
-        if (m < 0)
-        {
+        if (m < 0){
             printf("Invalid command line parameter\n ");
             exit(EXIT_FAILURE);
         }
-        else
-        {
-            if (m < 10)
-            {
+        else{
+            if (m < 10){
                 printf("Enter m value which is greater than 10. Exiting...\n");
                 exit(EXIT_FAILURE);
             }
@@ -572,12 +527,9 @@ main(int argc, char **argv)
     else
         m = 1024;
 
-    if (checkCmdLineFlag(argc, (const char **)argv, "steps"))
-    {
+    if (checkCmdLineFlag(argc, (const char **)argv, "steps")){
         steps = getCmdLineArgumentInt(argc, (const char **)argv, "steps=");
-
-        if (steps < 0)
-        {
+        if (steps < 0){
             printf("Invalid command line parameter\n ");
             exit(EXIT_FAILURE);
         }
@@ -585,12 +537,9 @@ main(int argc, char **argv)
     else
         steps = 1;
 
-    if (checkCmdLineFlag(argc, (const char **)argv, "type"))
-    {
+    if (checkCmdLineFlag(argc, (const char **)argv, "type")){
         type = getCmdLineArgumentInt(argc, (const char **)argv, "type=");
-
-        if (type < 0)
-        {
+        if (type < 0){
             printf("Invalid command line parameter\n ");
             exit(EXIT_FAILURE);
         }
